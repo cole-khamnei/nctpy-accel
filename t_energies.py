@@ -159,12 +159,13 @@ def get_cti_A_components(A_norm, T=1, rho=1, dt = 0.001, device="cpu", **extras)
     return M, E11, E12, Ad, S_b, B_b_T, dd_op
 
 
-def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, device="cpu", ret_mem=False, **extras):
+def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, device="cpu", intermediates=None, **extras):
     """ """
-
-    assert len(A_norms) == len(x0s) or (len(A_norms.shape) == 2)
-
-    M, E11, E12, Ad, S, B_T, dd_op = get_cti_A_components(A_norms, T=T, rho=rho, dt=dt, device=device)
+    if intermediates is None:
+        assert len(A_norms) == len(x0s) or (len(A_norms.shape) == 2)
+        M, E11, E12, Ad, S, B_T, dd_op = get_cti_A_components(A_norms, T=T, rho=rho, dt=dt, device=device)
+    else:
+        M, E11, E12, Ad, S, B_T, dd_op = intermediates
 
     devp = dict(device=torch.device(device))
     x0s_b = torch.tensor(x0s.reshape(*x0s.shape, 1).astype("float32"), **devp)
@@ -200,9 +201,6 @@ def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, device="cpu", ret_m
     err_costate = torch.linalg.norm(E12 @ l0 - dd, dim=1)
     err = torch.cat([err_xf, err_costate], dim=1).cpu().numpy()
 
-    if ret_mem:
-        return torch.cuda.mem_get_info()
-
     if device == "cuda":
         torch.cuda.empty_cache()
     return E, x.transpose(1, 2).cpu().numpy(), u.transpose(1, 2).cpu().numpy(), err
@@ -221,36 +219,48 @@ def get_max_batch_size(n_nodes, device):
 
 def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None):
     """ """
+    multiple_A = len(A_norms.shape) == 3
+
+    assert len(A_norms) == len(x0s) or not multiple_A
+
     device = get_device(device)
     # Pass subject let arguments into get_cti_batch:
     n_states, n_nodes = x0s.shape
+    n_integrate_steps = int(np.round(T / dt)) + 1
     n_batch = max(min(get_max_batch_size(n_nodes, device), 200), 1)
     n_blocks = int(np.ceil(n_states / n_batch))
-    n_integrate_steps = int(np.round(T / dt)) + 1
 
-    multiple_A = len(A_norms.shape) == 3
     E_s = np.empty(n_states)
     x_s = np.empty((n_states, n_integrate_steps, n_nodes))
     u_s = np.empty((n_states, n_integrate_steps, n_nodes))
     err_s = np.empty((n_states, 2))
 
+    if not multiple_A:
+        single_intermediates = get_cti_A_components(A_norms, T=T, rho=rho, dt=dt, device=device)
+
     for i in tqdm(range(n_blocks), leave=False, desc="Single trajectory set"):
         sl = slice(n_batch * i, min(n_batch * (i + 1), n_states))
-        A_block = A_norms[sl] if multiple_A else A_norms
-        block_results = get_cti_block(A_block, x0s[sl], xfs[sl], T=T, dt=dt, rho=rho, device=device.type)
+
+        if multiple_A:
+            intermediates = get_cti_A_components(A_norms[sl], T=T, rho=rho, dt=dt, device=device)
+        else:
+            intermediates = single_intermediates
+
+        block_results = get_cti_block(None, x0s[sl], xfs[sl], intermediates=intermediates,
+                                      T=T, dt=dt, rho=rho, device=device.type)
         E_s[sl], x_s[sl], u_s[sl], err_s[sl] = block_results
 
     return E_s, x_s, u_s, err_s
 
 
-def calc_trajectories(subjects, A_set, ntf_array, subj_save_path):
+def calc_trajectories(subjects, A_set, ntf_array, subj_save_path, device=None):
     """ """
 
     pbar = tqdm(total=len(A_set))
     for subj, AT_i, tf_array_i in zip(subjects, A_set, ntf_array):
         pbar.set_description(f"Calculating energy trajectories ({subj})")
         x0s, xfs = tf_array_i[:-1], tf_array_i[:-1]
-        E_s, x_s, u_s, err_s = get_cti_batch(AT_i, x0s, xfs, device="mps")
+        E_s, x_s, u_s, err_s = get_cti_batch(AT_i, x0s, xfs, device=None)
 
         results_obj = [E_s, np.mean(u_s, axis=1), np.mean(u_s ** 2, axis=1), err_s]
         with open(subj_save_path.format(subject=subj), 'wb') as file:
@@ -277,7 +287,7 @@ def load_control_pkl(pkl_path):
     return subjects, A_set, ntf_array
 
 
-def calculate_control_pkl(control_pkl_path: str, pkl_path_uf: str):
+def calculate_control_pkl(control_pkl_path: str, pkl_path_uf: str, device=None):
     """ """
 
     assert os.path.exists(control_pkl_path)
@@ -285,7 +295,7 @@ def calculate_control_pkl(control_pkl_path: str, pkl_path_uf: str):
     print("Loading control pkl: ...", end='\r')
     subjects, A_set, ntf_array = load_control_pkl(control_pkl_path)
     print("Loading control pkl: done")
-    calc_trajectories(subjects, A_set, ntf_array, pkl_path_uf)
+    calc_trajectories(subjects, A_set, ntf_array, pkl_path_uf, device=None)
 
 
 def norm(A, c=1):
