@@ -7,6 +7,7 @@ import torch
 import warnings
 import numpy as np
 import dill as pickle
+import hd5py
 
 from time import time
 
@@ -253,7 +254,7 @@ def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None):
     return E_s, x_s, u_s, err_s
 
 
-def calc_trajectories(subjects, A_set, ntf_array, subj_save_path, device=None):
+def calc_trajectories(subjects, A_set, ntf_array, subj_save_path, device=None, use_pkl=False):
     """ """
 
     pbar = tqdm(total=len(A_set))
@@ -262,9 +263,21 @@ def calc_trajectories(subjects, A_set, ntf_array, subj_save_path, device=None):
         x0s, xfs = tf_array_i[:-1], tf_array_i[:-1]
         E_s, x_s, u_s, err_s = get_cti_batch(AT_i, x0s, xfs, device=None)
 
-        results_obj = [E_s, np.mean(u_s, axis=1), np.mean(u_s ** 2, axis=1), err_s]
-        with open(subj_save_path.format(subject=subj), 'wb') as file:
-            results_i = pickle.dump(results_obj, file)
+        u_s = np.mean(u_s, axis=1)
+        u_s2 = np.mean(u_s ** 2, axis=1)
+
+        if use_pkl:
+            results_obj = [E_s.tolist(), u_s.tolist(), u_s2.tolist(), err_s.tolist()]
+            with open(subj_save_path.format(subject=subj), 'wb') as file:
+                results_i = pickle.dump(results_obj, file)
+        else:
+            hdf5_path = subj_save_path.format(subject=subj).replace(".pkl", ".hdf5")
+            with h5py.File(hdf5_path, "w") as f:
+                dset = f.create_dataset("E_s", data=E_s)
+                dset = f.create_dataset("u", data=u)
+                dset = f.create_dataset("u^2", data=u)
+                dset = f.create_dataset("err_s", data=err_s)
+
         pbar.update(1)
 
 
