@@ -7,7 +7,7 @@ import torch
 import warnings
 import numpy as np
 import dill as pickle
-import hd5py
+import h5py
 
 from time import time
 
