@@ -218,7 +218,7 @@ def get_max_batch_size(n_nodes, device):
     return int(np.floor(450 * mem_scale * size_scale / 10) * 10)
 
 
-def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None):
+def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None, pbar_kws=dict(leave=False)):
     """ """
     multiple_A = len(A_norms.shape) == 3
 
@@ -239,7 +239,9 @@ def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None):
     if not multiple_A:
         single_intermediates = get_cti_A_components(A_norms, T=T, rho=rho, dt=dt, device=device)
 
-    for i in tqdm(range(n_blocks), leave=False, desc="Single trajectory set"):
+    pbar = tqdm(total=n_states, desc="Single trajectory set", **pbar_kws)
+    for i in range(n_blocks):
+    # for i in tqdm(range(n_blocks), desc="Single trajectory set", **pbar_kws):
         sl = slice(n_batch * i, min(n_batch * (i + 1), n_states))
 
         if multiple_A:
@@ -250,7 +252,9 @@ def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None):
         block_results = get_cti_block(None, x0s[sl], xfs[sl], intermediates=intermediates,
                                       T=T, dt=dt, rho=rho, device=device.type)
         E_s[sl], x_s[sl], u_s[sl], err_s[sl] = block_results
+        pbar.update(sl.stop - sl.start)
 
+    pbar.close()
     return E_s, x_s, u_s, err_s
 
 
