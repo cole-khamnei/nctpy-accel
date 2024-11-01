@@ -123,6 +123,8 @@ def get_cti_torch(A_norm, x0, xf, B=None, S=None, T=1, rho=1, dt = 0.001, device
 
     return float(E), x.T.cpu().numpy(), u.T.cpu().numpy(), [float(err_costate), float(err_xf)]
 
+get_control_inputs = get_cti_torch
+
 
 def get_cti_A_components(A_norm, T=1, rho=1, dt = 0.001, device="cpu", **extras):
     """ """
