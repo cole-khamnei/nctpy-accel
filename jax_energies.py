@@ -290,7 +290,7 @@ def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
 
         def integrate_step(i, z):
             print(z[i - 1].shape, Ad.shape, Bd.shape)
-            return z.at[i].set(@ Adjnp.expand_dims(z[i - 1], -1) + Bd)
+            return z.at[i].set(Ad @ jnp.expand_dims(z[i - 1], -1) + Bd)
 
         z = jax.lax.fori_loop(1, n_integrate, integrate_step, z)
         z = z.transpose(1, 2, 0)
