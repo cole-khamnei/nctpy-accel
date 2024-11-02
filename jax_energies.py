@@ -139,8 +139,8 @@ def make_block_cti_A_components_function(n_nodes, n_A):
         dd_op = jnp.concatenate([E11 - I_b, E12], axis=cat_dim)
         return M, E11, E12, Ad, S_b, B_b_T, dd_op
 
-    # return block_A_components
-    return jax.jit(block_A_components)
+    return block_A_components
+    # return jax.jit(block_A_components)
 
 
 CTI_INTERMEDIATE_FUNCTIONS = {"400_1": make_block_cti_A_components_function(400, 0)}
@@ -159,16 +159,23 @@ def get_cti_A_components(A_norm, T=1, rho=1, dt = 0.001):
 
     return get_cti_A_components_func(A_norm, T=T, rho=rho, dt=dt)
 
+@jax.jit
+def z_integrate_step(z_prev, Ad, Bd):
+    """ """
+    return Ad @ z_prev + Bd
 
 def make_cti_integrate_function(n_integrate_steps):
     """ """
     def cti_integrate_func(z, x0s_b, l0, Ad, Bd):
-    # z = jnp.zeros((n_batch, 2 * n_nodes, n_integrate_steps))
         z = z.at[:, :, :1].set(jnp.concatenate([x0s_b, l0], axis=1))
+        # z_s = [jnp.concatenate([x0s_b, l0], axis=1)]
         for i in range(1, n_integrate_steps):
-            z = z.at[:, :, i:i+1].set(Ad @ z[:, :, i-1:i] + Bd)
+            # z_s.append(z_integrate_step(z_s[-1], Ad, Bd))
+            z = z.at[:, :, i:i+1].set(z_integrate_step(z[:, :, i-1:i], Ad, Bd))
+        # z = jnp.array(z_s)
         return z
 
+    # return cti_integrate_func
     return jax.jit(cti_integrate_func)
 
 

@@ -130,9 +130,8 @@ def test_cti_single_event_speed():
     system = "continuous"
     T = 1
 
-
-    n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-    n_batch = n_batch * 10
+    # n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
+    n_batch = 30
 
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes, system=system)
@@ -149,8 +148,11 @@ def test_cti_single_event_speed():
 
     pbar = tqdm(total=len(x0s), desc="NCT-TORCH")
     for A_norm, x0, xf in zip(A_norms, x0s, xfs):
-        te.get_control_inputs(A_norm, x0, xf)
+        te.get_control_inputs(A_norm, x0, xf, device="cuda")
         pbar.update(1)
+
+    with je.Timer("JAX compilation:") as t:
+        je.get_control_inputs(A_norm, x0, xf)
 
     pbar = tqdm(total=len(x0s), desc="NCT-JAX  ")
     for A_norm, x0, xf in zip(A_norms, x0s, xfs):
@@ -163,12 +165,14 @@ def test_cti_block_accuracy(backend_str):
 
     n_nodes = 400
     n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-
+    print("batch size:", n_batch)
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
-    j_outs = je.get_cti_block(A_norms, x0s, xfs)
-    t_outs = te.get_cti_block(A_norms, x0s, xfs)
+    for _ in range(3):
+        j_outs = je.get_cti_block(A_norms, x0s, xfs)
+        t_outs = te.get_cti_block(A_norms, x0s, xfs)
+        print()
 
     for j_out, t_out in zip(j_outs, t_outs):
         assert array_equal(j_out, t_out, rtol=1e-3, atol=1e-4)
@@ -176,6 +180,7 @@ def test_cti_block_accuracy(backend_str):
 
 def test_cti_block_speed():
     """ """
+    print("Running block speed tests:")
     n_nodes = 400
     n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
     print(n_batch)
@@ -183,11 +188,14 @@ def test_cti_block_speed():
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
     n_reps = 100
-    for _ in tqdm(range(n_reps), desc="testing torch cti block"):
-        te.get_cti_block(A_norms, x0s, xfs, device="cuda")
+
+    je.get_cti_block(A_norms, x0s, xfs)
 
     for _ in tqdm(range(n_reps), desc="testing jax cti block"):
         je.get_cti_block(A_norms, x0s, xfs)
+    
+    for _ in tqdm(range(n_reps), desc="testing torch cti block"):
+        te.get_cti_block(A_norms, x0s, xfs, device="cuda")
 
 
 def main():

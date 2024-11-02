@@ -12,6 +12,11 @@
 		[] sparsity constraints?
 
 
+	# Resources:
+	https://www.reddit.com/r/MachineLearning/comments/jgz6g2/d_best_repository_for_neural_odes/
+	https://www.kaggle.com/code/shivanshuman/learning-physics-with-pytorch
+
+
 # Nonlinear models:
 	[] add a nonlinear dynamics model?
 
