@@ -58,7 +58,7 @@ def matrix_norm(A, c=1, system="continuous"):
         return matrix_dnorm(A, c)
 
 
-def build_compute_dynamics_matrices(n_nodes, n_integrate):
+def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch):
 
     I = jnp.eye(n_nodes)
     big_I = jnp.eye(2 * n_nodes)
@@ -82,11 +82,14 @@ def build_compute_dynamics_matrices(n_nodes, n_integrate):
 
         dd_bias = jnp.concatenate([E11 - I, E12], axis=1) @ c
 
+        if n_batch > 0:
+            Ad = jnp.tile(Ad, (n_batch, 1, 1))
+
         return Ad, Bd, E11, E12, dd_bias, B.T
 
     return jax.jit(compute_dynamics_matrices)
 
-_compute_dynamics_matrices_funcs = CompiledFunctionSet(build_compute_dynamics_matrices, [(400, 1001)])
+_compute_dynamics_matrices_funcs = CompiledFunctionSet(build_compute_dynamics_matrices)
 
 
 def build_compute_single_trajectory(n_nodes, n_integrate):
@@ -121,7 +124,7 @@ def build_compute_single_trajectory(n_nodes, n_integrate):
 
     return jax.jit(compute_single_trajectory)
 
-_compute_single_trajectory_funcs = CompiledFunctionSet(build_compute_single_trajectory, [(400, 1001)])
+_compute_single_trajectory_funcs = CompiledFunctionSet(build_compute_single_trajectory)
 
 
 def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, dt=0.001, rho=1):
@@ -133,7 +136,7 @@ def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, dt=0.001, rho=1):
     B = I if B is None else jnp.array(B)
     S = I if S is None else jnp.array(S)
 
-    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate)
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, 0)
     compute_single_trajectory = _compute_single_trajectory_funcs(n_nodes, n_integrate)
 
     dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
@@ -288,9 +291,18 @@ def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
         z0 = jnp.concatenate([x0s_b, l0], axis=1).squeeze()
         z = z.at[0].set(z0)
 
+        # Ad = jnp.expand_dims(Ad, 0)
+        # TODO: figure out why this fixes the large numerical errors
+        # Ad = jnp.tile(Ad, (n_batch, 1, 1))
+
         def integrate_step(i, z):
             print(z[i - 1].shape, Ad.shape, Bd.shape)
-            return z.at[i].set(Ad @ jnp.expand_dims(z[i - 1], -1) + Bd)
+
+            mult = Ad @ jnp.expand_dims(z[i - 1], -1)
+            print(mult.shape)
+            add = mult.squeeze() + Bd
+            print(add.shape)
+            return z.at[i].set(add)
 
         z = jax.lax.fori_loop(1, n_integrate, integrate_step, z)
         z = z.transpose(1, 2, 0)
@@ -323,7 +335,7 @@ def get_control_inputs_multi(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rh
     B = I if B is None else jnp.array(B)
     S = I if S is None else jnp.array(S)
 
-    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate)
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, n_batch)
     dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
 
     compute_block_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)
