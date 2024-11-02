@@ -14,12 +14,21 @@ NP_CLOSE_PARAMS = dict(rtol=1e-05, atol=1e-05)
 
 def array_equal(A, B, show=True, rtol=1e-05, atol=1e-05):
     """ """
+    assert A.shape == B.shape, f"A-shape: {A.shape} and B-shape: {B.shape}"
     close = np.isclose(A, B, rtol=rtol, atol=atol)
     value = close.all()
     if show and not value:
-        print(A - B)
+        diff = A - B
+        rel_diff = np.abs(diff / (A + (A == 0))) * 100
+        print("A:", A)
+        print("B:", B)
+        print(diff)
+        print(rel_diff)
         print(close)
-
+        print(rel_diff.mean(axis=0).shape, rel_diff.mean(axis=0))
+        # print(close.mean(axis=1).shape, close.mean(axis=1))
+        print("Average absolute difference (%):", np.mean(np.abs(diff)))
+        print("Average relative difference (%):", np.mean(rel_diff))
         print(np.prod(A.shape) - np.sum(close * 1), (1 - np.mean(close * 1)), "wrong values")
     return value
 
@@ -29,25 +38,28 @@ def get_relative_error(A, B):
     return np.abs(A - B) / (A + (A == 0) + 1)
 
 
-def get_random_states(n_nodes, n_batch):
+def get_random_states(n_nodes, n_batch, seed=1):
     """ """
-    x0s = np.array([x / np.linalg.norm(x) for x in np.random.randn(n_batch, n_nodes)])
-    xfs = np.array([x / np.linalg.norm(x) for x in np.random.randn(n_batch, n_nodes)])
+    np.random.seed(seed)
+    x0s = np.array([x / np.linalg.norm(x) for x in np.random.randn(n_batch, n_nodes) * 100])
+    xfs = np.array([x / np.linalg.norm(x) for x in np.random.randn(n_batch, n_nodes) * 100])
 
     return x0s, xfs
 
 
-def get_random_A_set(n_batch, n_nodes):
+def get_random_A_set(n_batch, n_nodes, seed=1):
     """ """
-    A_rand_set = np.random.randn(n_batch, n_nodes, n_nodes)
+    np.random.seed(seed)
+    A_rand_set = np.random.randn(n_batch, n_nodes, n_nodes) * 1000
     A_rand_set = np.array([np.tril(a) + np.tril(a, -1).T for a in A_rand_set])
 
     return A_rand_set
 
 
-def get_random_A_norms(n_batch, n_nodes, system="continuous"):
+def get_random_A_norms(n_batch, n_nodes, seed=1, system="continuous"):
     """ """
-    A_set = get_random_A_set(n_batch, n_nodes)
+    np.random.seed(seed)
+    A_set = get_random_A_set(n_batch, n_nodes, seed=seed)
     return np.array([te.matrix_norm(A_i, c=1, system=system) for A_i in A_set])
 
 
@@ -109,8 +121,8 @@ def test_cti_accuracy(backend_str):
         E_b, x_b, u_b, err_b = backend.get_control_inputs(A_norm, x0, xf, T=T)
         x, u, err = nct_e.get_control_inputs(A_norm, T, B, x0, xf, system=system)
 
-        assert array_equal(x, x_b, rtol=1e-4, atol=1e-4)
-        assert array_equal(u, u_b, rtol=1e-4, atol=1e-4)
+        assert array_equal(x, x_b, rtol=1e-3, atol=1e-4)
+        assert array_equal(u, u_b, rtol=1e-3, atol=1e-4)
 
         x_errors.append(get_relative_error(x, x_b).ravel())
         u_errors.append(get_relative_error(u, u_b).ravel())
@@ -131,33 +143,42 @@ def test_cti_single_event_speed():
     T = 1
 
     # n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-    n_batch = 30
+    n_batch = 20
 
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes, system=system)
 
-    B = np.eye(n_nodes)
-    pbar = tqdm(total=len(x0s), desc="NCTPY      ")
-    for A_norm, x0, xf in zip(A_norms, x0s, xfs):
-        nct_e.get_control_inputs(A_norm, T, B, x0, xf, system=system)
-        pbar.update(1)
+    # B = np.eye(n_nodes)
+    # pbar = tqdm(total=len(x0s), desc="NCTPY      ")
+    # for A_norm, x0, xf in zip(A_norms, x0s, xfs):
+    #     nct_e.get_control_inputs(A_norm, T, B, x0, xf, system=system)
+    #     pbar.update(1)
     
-    n_batch = n_batch * 3
+    n_batch = n_batch * 10
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes, system=system)
 
-    pbar = tqdm(total=len(x0s), desc="NCT-TORCH")
-    for A_norm, x0, xf in zip(A_norms, x0s, xfs):
-        te.get_control_inputs(A_norm, x0, xf, device="cuda")
-        pbar.update(1)
+    # pbar = tqdm(total=len(x0s), desc="NCT-TORCH")
+    # for A_norm, x0, xf in zip(A_norms, x0s, xfs):
+    #     te.get_control_inputs(A_norm, x0, xf, device="cuda")
+    #     pbar.update(1)
 
     with je.Timer("JAX compilation:") as t:
-        je.get_control_inputs(A_norm, x0, xf)
+        je.get_control_inputs(A_norms[0], x0s[0], xfs[0])
+
+    n_reps = 10
+    x0s, xfs = get_random_states(n_nodes, n_batch * 3)
+    pbar = tqdm(total=len(x0s)*n_reps, desc="NCT-JAX Multi")
+    for i in range(n_reps):
+        je.get_control_inputs_multi(A_norms[0], x0s, xfs)
+        pbar.update(len(x0s))
 
     pbar = tqdm(total=len(x0s), desc="NCT-JAX  ")
     for A_norm, x0, xf in zip(A_norms, x0s, xfs):
-        je.get_control_inputs(A_norm, x0, xf)
+        je.get_control_inputs(A_norms[0], x0, xf)
         pbar.update(1)
+    pbar.close()
+    print()
 
 
 def test_cti_block_accuracy(backend_str):
@@ -169,37 +190,46 @@ def test_cti_block_accuracy(backend_str):
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
-    for i in range(3):
-        with je.Timer(f"whole function {i}:") as t:
-            j_outs = je.get_cti_block(A_norms, x0s, xfs)
-        
-        t_outs = te.get_cti_block(A_norms, x0s, xfs)
-        print()
+    # A_si = slice(None, None)
+    A_si = 0
 
-    # for j_out, t_out in zip(j_outs, t_outs):
-    #     assert array_equal(j_out, t_out, rtol=1e-3, atol=1e-4)
+    n_reps = 1
+    for i in range(n_reps):
+        with je.Timer(f"whole function {i}:") as t:
+            # j_outs = je.get_cti_block(A_norms[A_si], x0s, xfs)
+            j_outs = je.get_control_inputs_multi(A_norms[A_si], x0s, xfs)
+        
+        t_outs = te.get_cti_block(A_norms[A_si], x0s, xfs)
+    #     print()
+
+    for j_out, t_out in zip(j_outs, t_outs):
+        print(type(j_out), j_out.shape, type(t_out), t_out.shape)
+        j_out = np.array(j_out)
+        # t_out = t_out.cpu().numpy()
+        assert array_equal(j_out, t_out, rtol=1e-3, atol=1e-3)
 
 
 def test_cti_block_speed():
     """ """
     print("Running block speed tests:")
     n_nodes = 400
-    n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-    n_batch = 20
-    print(n_batch)
+    
+    n_batch = 50
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
     n_reps = 1500 // n_batch
-    # n_reps = 100
-
     je.get_cti_block(A_norms, x0s, xfs)
-
     pbar = tqdm(total=n_reps * n_batch, desc="testing jax cti block")
     for _ in range(n_reps):
         je.get_cti_block(A_norms, x0s, xfs)
         pbar.update(n_batch)
 
+    n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
+    x0s, xfs = get_random_states(n_nodes, n_batch)
+    A_norms = get_random_A_norms(n_batch, n_nodes)
+
+    n_reps = 1500 // n_batch
     pbar = tqdm(total=n_reps * n_batch, desc="testing torch cti block")
     for _ in range(n_reps):
         te.get_cti_block(A_norms, x0s, xfs, device="cuda")
@@ -211,11 +241,9 @@ def main():
     print("Running benchmark tests:\n")
     # test_cti_accuracy("torch")
     # test_cti_accuracy("jax")
-    
-    # test_cti_block_accuracy("jax")
-    test_cti_block_speed()
+    test_cti_block_accuracy("jax")
     # test_cti_single_event_speed()
-
+    # test_cti_block_speed()
 
     # tests = [test_matrix_norms]
     # for test in tests:

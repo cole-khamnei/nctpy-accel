@@ -198,7 +198,7 @@ def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, device="cpu", inter
 
     x = z[:, :n_nodes, :]
     u = (- B_T @ z[:, n_nodes:, :]) / (2 * rho)
-    E = torch.trapezoid(u ** 2, dim=1).sum(dim=1).cpu().numpy()
+    E = torch.trapezoid(u ** 2, dim=1).sum(dim=1)
 
     err_xf = torch.linalg.norm(x[:, :, -1:] - xfs_b, dim=1)
     err_costate = torch.linalg.norm(E12 @ l0 - dd, dim=1)
@@ -206,7 +206,8 @@ def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, device="cpu", inter
 
     if device == "cuda":
         torch.cuda.empty_cache()
-    return E, x.transpose(1, 2).cpu().numpy(), u.transpose(1, 2).cpu().numpy(), err
+    
+    return E.cpu().numpy(), x.transpose(1, 2).cpu().numpy(), u.transpose(1, 2).cpu().numpy(), err
 
 
 def get_max_batch_size(n_nodes, device):

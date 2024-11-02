@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import numpy
 
 import time
+from tqdm.auto import tqdm
 
 VALID_SYSTEMS = ["discrete", "continuous"]
 
@@ -20,12 +21,26 @@ class Timer:
         # print(f"Duration {self.label}: {self.duration:0.5f} seconds")
 
 
+class CompiledFunctionSet():
+    def __init__(self, make_function, initial_args=[], make_key=None):
+        self.make_function = make_function
+        self.make_key = make_key or (lambda args: "-".join(str(a) for a in args))
+        self.compiled_versions = {self.make_key(args): self.make_function(*args) for args in initial_args}
+
+    def __call__(self, *args):
+        key = self.make_key(args)
+        if key not in self.compiled_versions:
+            self.compiled_versions[key] = self.make_function(*args)
+        return self.compiled_versions[key]
+
+
 @jax.jit
 def matrix_dnorm(A, c):
     """ """
     w, _ = jnp.linalg.eigh(A)
     l = jnp.abs(w).max()
     return A / (c + l)
+
 
 @jax.jit
 def matrix_cnorm(A, c):
@@ -42,66 +57,58 @@ def matrix_norm(A, c=1, system="continuous"):
     else:
         return matrix_dnorm(A, c)
 
-@jax.jit
-def nct_trajectory_intermediates(A_norm, B, S, T, dt, rho, x0, xf, xr, n_nodes, I, big_I, zero_array):
-    """ """
 
-    M = jnp.concatenate((jnp.concatenate((A_norm, (-B @ B.T) / (2 * rho)), axis=1),
+def build_compute_dynamics_matrices(n_nodes, n_integrate):
+
+    I = jnp.eye(n_nodes)
+    big_I = jnp.eye(2 * n_nodes)
+    zero_array = jnp.zeros((n_nodes, 1))
+    xr = jnp.zeros((n_nodes, 1))
+
+    def compute_dynamics_matrices(A_norm, S, B, T, dt, rho):
+        M = jnp.concatenate((jnp.concatenate((A_norm, (-B @ B.T) / (2 * rho)), axis=1),
                              jnp.concatenate((-2 * S, -A_norm.T), axis=1)))
-    c = jnp.concatenate([zero_array, 2 * S @ xr], axis=0)
-    c = jnp.linalg.solve(M, c)
+        c = jnp.concatenate([zero_array, 2 * S @ xr], axis=0)
+        c = jnp.linalg.solve(M, c)
 
-    E = jax.scipy.linalg.expm(M * T)
+        Ad = jax.scipy.linalg.expm(M * dt) 
+        Bd = ((Ad - big_I) @ c).reshape(-1)
 
-    n_nodes = len(A_norm)
-    E11 = E[:n_nodes][:, :n_nodes]
-    E12 = E[:n_nodes][:, n_nodes:]
+        E = jax.scipy.linalg.expm(M * T)
+        # E = jnp.linalg.matrix_power(Ad, n_integrate)
 
-    dd = xf - (E11 @ x0)  - (jnp.concatenate([E11 - I, E12], axis=1) @ c)
-    l0 = jnp.linalg.solve(E12, dd)
-    Ad = jax.scipy.linalg.expm(M * dt)
-    Bd = ((Ad - big_I) @ c).reshape(-1)
-    return M, c, E12, dd, l0, Ad, Bd
+        E11 = E[:n_nodes][:, :n_nodes]
+        E12 = E[:n_nodes][:, n_nodes:]
+
+        dd_bias = jnp.concatenate([E11 - I, E12], axis=1) @ c
+
+        return Ad, Bd, E11, E12, dd_bias, B.T
+
+    return jax.jit(compute_dynamics_matrices)
+
+_compute_dynamics_matrices_funcs = CompiledFunctionSet(build_compute_dynamics_matrices, [(400, 1001)])
 
 
-@jax.jit
-def nct_integrate_trajectory(z, x0, l0, Ad, Bd):
+def build_compute_single_trajectory(n_nodes, n_integrate):
     """ """
-    z = z.at[:, 0:1].set(jnp.concatenate([x0, l0], axis=0))
-    for i in jnp.arange(1, 1001):
-        z = z.at[:, i].set(Ad @ z[:, i - 1] + Bd)
-    return z
+    I = jnp.eye(n_nodes)
+    def compute_single_trajectory(A_norm, dynamics_matrices, x0, xf, B, rho):
 
+        Ad, Bd, E11, E12, dd_bias, B_T = dynamics_matrices
 
-def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, rho=1, n_integrate_steps=1001):
-    """ """
-    with Timer("prep") as t:
-        n_nodes = A_norm.shape[0]
-        dt = jnp.array(T / (n_integrate_steps - 1))
-        # n_integrate_steps = jnp.array(jnp.round(T / dt), int) + 1
-
-        # jnp tensors on device
-        A_norm = jnp.array(A_norm)
         x0 = jnp.array(x0.reshape(-1, 1))
         xf = jnp.array(xf.reshape(-1, 1))
-        xr = jnp.zeros((n_nodes, 1))
 
-        I = jnp.eye(n_nodes)
-        big_I = jnp.eye(2 * n_nodes)
-        B = I if B is None else jnp.array(B)
-        S = I if S is None else jnp.array(S)
-        T, rho, dt = jnp.array([T, rho, dt])
-        zero_array = jnp.zeros((n_nodes, 1))
-        z = jnp.zeros((2 * n_nodes, n_integrate_steps))
+        dd = xf - (E11 @ x0) - dd_bias
+        l0 = jnp.linalg.solve(E12, dd)
 
-    with Timer("intermediates") as t:
-        M, c, E12, dd, l0, Ad, Bd = nct_trajectory_intermediates(A_norm, B, S, T, dt, rho, x0, xf, xr,
-                                                                 n_nodes, I, big_I, zero_array)
-    
-    with Timer("integrate") as t:
-        z = nct_integrate_trajectory(z, x0, l0, Ad, Bd)
-    
-    with Timer("end") as t:
+        z = jnp.zeros((2 * n_nodes, n_integrate))
+        def integrate_step(i, z):
+            return z.at[:, i].set(Ad @ z[:, i - 1] + Bd)
+
+        z = z.at[:, :1].set(jnp.concatenate([x0, l0], axis=0))
+        z = jax.lax.fori_loop(1, n_integrate, integrate_step, z)
+
         x = z[:n_nodes, :]
         u = (- B.T @ z[n_nodes:, :]) / (2 * rho)
         E = jnp.sum(u ** 2)
@@ -110,67 +117,93 @@ def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, rho=1, n_integrate_s
         err_xf = jnp.linalg.norm(x[:, -1].reshape(-1, 1) - xf)
         err = [jnp.array(err_costate, float), jnp.array(err_xf, float)]
 
-    return jnp.array(E, float), numpy.array(x.T), numpy.array(u.T), err
-    
+        return E, x.T, u.T, err
+
+    return jax.jit(compute_single_trajectory)
+
+_compute_single_trajectory_funcs = CompiledFunctionSet(build_compute_single_trajectory, [(400, 1001)])
+
+
+def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, dt=0.001, rho=1):
+    """ """
+    n_nodes = A_norm.shape[-1]
+    n_integrate = int(numpy.round(T / dt) + 1)
+
+    I = jnp.eye(n_nodes)
+    B = I if B is None else jnp.array(B)
+    S = I if S is None else jnp.array(S)
+
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate)
+    compute_single_trajectory = _compute_single_trajectory_funcs(n_nodes, n_integrate)
+
+    dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
+    return compute_single_trajectory(A_norm, dynamics_matrices, x0, xf, B, rho)
 
 
 ########################################## Block Matrices #########################################################
 
 
-class CompiledFunctionSet():
-    def __init__(self, make_function, initial_args, make_key=None):
-        self.make_function = make_function
-        self.make_key = make_key or (lambda args: "-".join(str(a) for a in args))
-        self.compiled_versions = {self.make_key(args): self.make_function(*args) for args in initial_args}
-
-    def __call__(self, *args):
-        key = self.make_key(args)
-        if key not in self.compiled_versions:
-            self.compiled_versions[key] = self.make_function(*args)
-        return self.compiled_versions[key]
-
-
-def build_cti_block_A_components(n_nodes, n_A):
+def build_cti_block_A_components(n_nodes, n_A, n_batch, n_integrate):
     """ """
     I_b = jnp.eye(n_nodes)
     if n_A > 1:
         T_dims, cat_dim = (0, 2, 1), 2
         I_b = jnp.tile(I_b, (n_A, 1, 1))
+        expand_Ad = lambda Ad: Ad
+        def split_E(E):
+            return E[:, :n_nodes, :n_nodes], E[:, :n_nodes, n_nodes:]
+
     else:
         T_dims, cat_dim = (0, 1), 1
+        expand_Ad = lambda Ad: jnp.tile(Ad, (n_batch, 1, 1))
+        def split_E(E):
+            return E[:n_nodes, :n_nodes], E[:n_nodes, n_nodes:]
+
     S_b, B_b, B_b_T = I_b, I_b, I_b.transpose(*T_dims)
+
+    rng = jax.random.PRNGKey(0)
+    # m_fake = jnp.zeros((n_A, 2*n_nodes, 2*n_nodes))
+    m_fake = jax.random.normal(rng, (n_A, 2*n_nodes, 2*n_nodes))
+    E11_f, E12_f = split_E(m_fake)
+    Ad_f = m_fake
+    dd_op_f = jnp.zeros((n_A, n_nodes, 2 * n_nodes))
 
     def block_A_components_func(A_norm, T = 1, rho = 1, dt = 0.001):
         """ """
+        # return m_fake, E11_f, E12_f, Ad_f, S_b, B_b_T, dd_op_f
+
         A_norm_T = A_norm.transpose(*T_dims)
         M = jnp.concatenate([jnp.concatenate([A_norm, (-B_b @ B_b_T) / (2 * rho)], axis=cat_dim),
                              jnp.concatenate([- 2 * S_b, -A_norm_T], axis=cat_dim)],
                             axis=cat_dim - 1)
-        E = jax.scipy.linalg.expm(M * T)
+
+
+        # expm is slow in jax, can skip the double expm and just use matrix power as:
+        # e^(X * T) = e^(X * dt * (T/dt)) = (e^(X * dt))^n_integrate
         Ad = jax.scipy.linalg.expm(M * dt)
-        E11, E12 = E[:, :n_nodes][:, :, :n_nodes], E[:, :n_nodes][:, :, n_nodes:]
+        E = jax.scipy.linalg.expm(M * T)
+        # E = jnp.linalg.matrix_power(Ad, n_integrate)
+
+        Ad = expand_Ad(Ad)
+        E11, E12 = split_E(E)
         dd_op = jnp.concatenate([E11 - I_b, E12], axis=cat_dim)
+    
         return M, E11, E12, Ad, S_b, B_b_T, dd_op
 
     return jax.jit(block_A_components_func)
 
-_CTI_block_A_component_funcs = CompiledFunctionSet(build_cti_block_A_components, [(400, 1)])
+_CTI_block_A_component_funcs = CompiledFunctionSet(build_cti_block_A_components, [(400, 1, 20, 1001)])
 
 
-def build_cti_integrate(n_integrate_steps):
+def build_cti_integrate(n_integrate):
     """ """
     def cti_integrate_func(z, x0s_b, l0, Ad, Bd):
         z0 = jnp.concatenate([x0s_b, l0], axis=1).squeeze()
         z = z.at[0].set(z0)
-
         def body_fun(i, z):
-            z_i = (Ad @ jnp.expand_dims(z[i - 1], 2) + Bd).squeeze()
-            # return z
-            return z.at[i].set(z_i)
-        z = jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
-        # jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
-        return z
+            return z.at[i].set((Ad @ jnp.expand_dims(z[i - 1], -1) + Bd).squeeze())
 
+        return jax.lax.fori_loop(1, n_integrate, body_fun, z)
     return jax.jit(cti_integrate_func)
 
 _CTI_integrate_funcs = CompiledFunctionSet(build_cti_integrate, [(1001,)], make_key=lambda n: n)
@@ -178,14 +211,14 @@ _CTI_integrate_funcs = CompiledFunctionSet(build_cti_integrate, [(1001,)], make_
 
 def build_cti_core(n_nodes, n_batch, n_A, n_integrate):
     
-    create_block_A_components = _CTI_block_A_component_funcs(n_nodes, n_A)
+    create_block_A_components = _CTI_block_A_component_funcs(n_nodes, n_A, n_batch, n_integrate)
     integrate_z = _CTI_integrate_funcs(n_integrate)
     state_tensor_shape = (n_batch, n_nodes, 1)
     
     def cti_core(A_norms, x0s, xfs, T, dt, rho):
         """ """
         M, E11, E12, Ad, S, B_T, dd_op = create_block_A_components(A_norms, T=T, rho=rho, dt=dt)
-        
+
         x0s_b = jnp.array(x0s.reshape(state_tensor_shape))
         xfs_b = jnp.array(xfs.reshape(state_tensor_shape))
         xrs_b = jnp.zeros(state_tensor_shape)
@@ -215,16 +248,15 @@ def build_cti_core(n_nodes, n_batch, n_A, n_integrate):
         x = x.transpose(0, 2, 1)
         u = u.transpose(0, 2, 1)
 
-        return E, x, u, err
+        return E, x, u, err, z
 
     return jax.jit(cti_core)
 
-
-_CTI_core_funcs = CompiledFunctionSet(build_cti_core, [(400, 20, 20, 1001)])
+_CTI_core_funcs = CompiledFunctionSet(build_cti_core)
 
 
 def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, intermediates=None):
-    """ assumes multi A: TODO fix"""
+    """ assumes multi A: TODO fixed"""
     assert x0s.shape == xfs.shape
 
     n_batch, n_nodes = x0s.shape 
@@ -234,3 +266,75 @@ def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, intermediates=None)
     CTI_core = _CTI_core_funcs(n_nodes, n_batch, n_A, n_integrate)
 
     return CTI_core(A_norms, x0s, xfs, T, dt, rho)
+
+
+def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
+    """ """
+    state_tensor_shape = (n_batch, n_nodes, 1)
+
+    big_I = jnp.eye(2 * n_nodes)
+
+    def compute_block_trajectory(A_norms, dynamics_matrices, x0s, xfs, T, dt, rho):
+        """ """
+        Ad, Bd, E11, E12, dd_bias, B_T = dynamics_matrices
+
+        x0s_b = jnp.array(x0s.reshape(state_tensor_shape))
+        xfs_b = jnp.array(xfs.reshape(state_tensor_shape))
+
+        dd = xfs_b - (E11 @ x0s_b) - dd_bias
+        l0 = jnp.linalg.solve(E12, dd)
+
+        z = jnp.zeros((n_integrate, n_batch, 2 * n_nodes))
+        z0 = jnp.concatenate([x0s_b, l0], axis=1).squeeze()
+        z = z.at[0].set(z0)
+
+        def integrate_step(i, z):
+            print(z[i - 1].shape, Ad.shape, Bd.shape)
+            return z.at[i].set(@ Adjnp.expand_dims(z[i - 1], -1) + Bd)
+
+        z = jax.lax.fori_loop(1, n_integrate, integrate_step, z)
+        z = z.transpose(1, 2, 0)
+
+        x = z[:, :n_nodes, :]
+        u = (- B_T @ z[:, n_nodes:, :]) / (2 * rho)
+        E = jnp.trapezoid(u ** 2, axis=1).sum(axis=1)
+
+        err_xf = jnp.linalg.norm(x[:, :, -1:] - xfs_b, axis=1)
+        err_costate = jnp.linalg.norm(E12 @ l0 - dd, axis=1)
+        err = jnp.concatenate([err_xf, err_costate], axis=1)
+
+        x = x.transpose(0, 2, 1)
+        u = u.transpose(0, 2, 1)
+
+        return E, x, u, err
+
+    return jax.jit(compute_block_trajectory)
+
+_compute_block_trajectory_funcs = CompiledFunctionSet(build_compute_block_trajectory)
+
+
+def get_control_inputs_multi(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1):
+    """ """
+    n_nodes = A_norm.shape[-1]
+    n_integrate = int(numpy.round(T / dt) + 1)
+    n_batch = len(x0s)
+
+    I = jnp.eye(n_nodes)
+    B = I if B is None else jnp.array(B)
+    S = I if S is None else jnp.array(S)
+
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate)
+    dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
+
+    compute_block_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)
+
+    return compute_block_trajectory(A_norm, dynamics_matrices, x0s, xfs, T, dt, rho)
+    # E_s, x_s, u_s, err_s = [], [], [], []
+    # pbar = tqdm(total=len(x0s), desc="CTI multi jax:")
+    # for x0, xf in zip(x0s, xfs):
+    #     E, x, u, err = compute_single_trajectory(A_norm, dynamics_matrices, x0, xf, B, rho)
+    #     E_s.append(E), x_s.append(x), u_s.append(u), err_s.append(err)
+    #     pbar.update(1)
+
+    # return numpy.array(E_s), numpy.array(x_s), numpy.array(u_s), numpy.array(err_s)
+
