@@ -117,7 +117,20 @@ def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, rho=1, n_integrate_s
 ########################################## Block Matrices #########################################################
 
 
-def make_block_cti_A_components_function(n_nodes, n_A):
+class CompiledFunctionSet():
+    def __init__(self, make_function, initial_args, make_key=None):
+        self.make_function = make_function
+        self.make_key = make_key or (lambda args: "-".join(str(a) for a in args))
+        self.compiled_versions = {self.make_key(args): self.make_function(*args) for args in initial_args}
+
+    def __call__(self, *args):
+        key = self.make_key(args)
+        if key not in self.compiled_versions:
+            self.compiled_versions[key] = self.make_function(*args)
+        return self.compiled_versions[key]
+
+
+def build_cti_block_A_components(n_nodes, n_A):
     """ """
     I_b = jnp.eye(n_nodes)
     if n_A > 1:
@@ -125,10 +138,10 @@ def make_block_cti_A_components_function(n_nodes, n_A):
         I_b = jnp.tile(I_b, (n_A, 1, 1))
     else:
         T_dims, cat_dim = (0, 1), 1
+    S_b, B_b, B_b_T = I_b, I_b, I_b.transpose(*T_dims)
 
-    def block_A_components(A_norm, T = 1, rho = 1, dt = 0.001):
+    def block_A_components_func(A_norm, T = 1, rho = 1, dt = 0.001):
         """ """
-        S_b, B_b, B_b_T = I_b, I_b, I_b.transpose(*T_dims)
         A_norm_T = A_norm.transpose(*T_dims)
         M = jnp.concatenate([jnp.concatenate([A_norm, (-B_b @ B_b_T) / (2 * rho)], axis=cat_dim),
                              jnp.concatenate([- 2 * S_b, -A_norm_T], axis=cat_dim)],
@@ -139,147 +152,85 @@ def make_block_cti_A_components_function(n_nodes, n_A):
         dd_op = jnp.concatenate([E11 - I_b, E12], axis=cat_dim)
         return M, E11, E12, Ad, S_b, B_b_T, dd_op
 
-    # return block_A_components
-    return jax.jit(block_A_components)
+    return jax.jit(block_A_components_func)
+
+_CTI_block_A_component_funcs = CompiledFunctionSet(build_cti_block_A_components, [(400, 1)])
 
 
-CTI_INTERMEDIATE_FUNCTIONS = {"400_1": make_block_cti_A_components_function(400, 0)}
-
-def get_cti_A_components(A_norm, T=1, rho=1, dt = 0.001):
-    """ """
-    A_norm = jnp.array(A_norm)
-    n_nodes = A_norm.shape[-1]
-    func_tag = f"{n_nodes}_{A_norm.shape[0]}" if len(A_norm.shape) == 3 else f"{n_nodes}_1"
-
-    if func_tag in CTI_INTERMEDIATE_FUNCTIONS:
-        get_cti_A_components_func = CTI_INTERMEDIATE_FUNCTIONS[func_tag]
-    else:
-        get_cti_A_components_func = make_block_cti_A_components_function(*[int(s) for s in func_tag.split("_")])
-        CTI_INTERMEDIATE_FUNCTIONS[func_tag] = get_cti_A_components_func  
-
-    return get_cti_A_components_func(A_norm, T=T, rho=rho, dt=dt)
-
-@jax.jit
-def z_integrate_step(z_prev, Ad, Bd):
-    """ """
-    return Ad @ z_prev + Bd
-
-def make_cti_integrate_function(n_integrate_steps):
+def build_cti_integrate(n_integrate_steps):
     """ """
     def cti_integrate_func(z, x0s_b, l0, Ad, Bd):
-        z0 = jnp.concatenate([x0s_b, l0], axis=1).transpose(1, 2, 0)
-        z = z.at[:1].set(z0)
-        # z_s = [jnp.concatenate([x0s_b, l0], axis=1)]
-        for i in range(1, n_integrate_steps):
-            # z_s.append(z_integrate_step(z_s[-1], Ad, Bd))
-            z_integrate_step(z[i - 1:i], Ad, Bd)
-            # z = z.at[:, :, i:i+1].set(z_integrate_step(z[:, :, i-1:i], Ad, Bd))
-        # z = jnp.array(z_s)
+        z0 = jnp.concatenate([x0s_b, l0], axis=1).squeeze()
+        z = z.at[0].set(z0)
+
+        def body_fun(i, z):
+            z_i = (Ad @ jnp.expand_dims(z[i - 1], 2) + Bd).squeeze()
+            return z
+            # return z.at[i].set(z_i)
+        # z = jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
+        # jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
         return z
 
-    # return cti_integrate_func
     return jax.jit(cti_integrate_func)
 
+_CTI_integrate_funcs = CompiledFunctionSet(build_cti_integrate, [(1001,)], make_key=lambda n: n)
 
 
-@jax.jit
-def calculate_z(A, z0, n_integrate):
-    def body_fun(i, z_all):
-        z_next = A @ z_all[i - 1]
-        return z_all.at[i].set(z_next)
-
-    z_all = jnp.zeros((n_integrate + 1, z0.shape[0]))
-    z_all = z_all.at[0].set(z0)
-    z_all = jax.lax.fori_loop(1, n_integrate + 1, body_fun, z_all)
+def build_cti_core(n_nodes, n_batch, n_A, n_integrate):
     
-    return z_all
+    create_block_A_components = _CTI_block_A_component_funcs(n_nodes, n_A)
+    integrate_z = _CTI_integrate_funcs(n_integrate)
+    state_tensor_shape = (n_batch, n_nodes, 1)
+    
+    def cti_core(A_norms, x0s, xfs, T, dt, rho):
+        """ """
+        M, E11, E12, Ad, S, B_T, dd_op = create_block_A_components(A_norms, T=T, rho=rho, dt=dt)
+        
+        x0s_b = jnp.array(x0s.reshape(state_tensor_shape))
+        xfs_b = jnp.array(xfs.reshape(state_tensor_shape))
+        xrs_b = jnp.zeros(state_tensor_shape)
+        zero_array = jnp.zeros(state_tensor_shape)
+
+        c = jnp.concatenate([zero_array, 2 * S @ xrs_b], axis=1)
+        c = jnp.linalg.solve(M, c)
+        
+        dd = xfs_b - (E11 @ x0s_b) - (dd_op @ c)
+        l0 = jnp.linalg.solve(E12, dd)
+
+        big_I = jnp.eye(2 * n_nodes)
+        Bd = (Ad - big_I) @ c
+
+        z = jnp.zeros((n_integrate, n_batch, 2 * n_nodes))
+        z = integrate_z(z, x0s_b, l0, Ad, Bd)
+        z = z.transpose(1, 2, 0)
+
+        x = z[:, :n_nodes, :]
+        u = (- B_T @ z[:, n_nodes:, :]) / (2 * rho)
+        E = jnp.trapezoid(u ** 2, axis=1).sum(axis=1)
+
+        err_xf = jnp.linalg.norm(x[:, :, -1:] - xfs_b, axis=1)
+        err_costate = jnp.linalg.norm(E12 @ l0 - dd, axis=1)
+        err = jnp.concatenate([err_xf, err_costate], axis=1)
+
+        x = x.transpose(0, 2, 1)
+        u = u.transpose(0, 2, 1)
+
+        return E, x, u, err
+
+    return jax.jit(cti_core)
 
 
-class CTIIntegrateFunctions():
-    def __init__(self, n_integrate_steps_list=[1001]):
-        self.make_function = make_cti_integrate_function
-        self.functions = {n: self.make_function(n) for n in n_integrate_steps_list}
-
-    def __getitem__(self, index):
-        if index not in self.functions:
-            self.functions[index] = self.make_function(index)
-        return self.functions[index]
-
-            
-CTI_INTEGRATE_FUNCTIONS = CTIIntegrateFunctions()
-
-
-def cti_integrate(z, x0s_b, l0, Ad, Bd, n_integrate_steps):
-    """ """
-    return CTI_INTEGRATE_FUNCTIONS[n_integrate_steps](z, x0s_b, l0, Ad, Bd)
-
-
-@jax.jit
-def cti_final_math(xf, z_2, xfs_b, E12, l0, dd, B_T, rho):
-    """ """
-    u = (- B_T @ z_2) / (2 * rho)
-    E = jnp.trapezoid(u ** 2, axis=1).sum(axis=1)
-
-    err_xf = jnp.linalg.norm(xf - xfs_b, axis=1)
-    err_costate = jnp.linalg.norm(E12 @ l0 - dd, axis=1)
-    err = jnp.concatenate([err_xf, err_costate], axis=1)
-    return u, E, err
+_CTI_core_funcs = CompiledFunctionSet(build_cti_core, [(400, 20, 20, 1001)])
 
 
 def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, intermediates=None):
-    """ """
-# with Timer("start of block") as t:
-    if intermediates is None:
-        assert len(A_norms) == len(x0s) or (len(A_norms.shape) == 2)
-        with Timer("get CTI A components") as t:
-            M, E11, E12, Ad, S, B_T, dd_op = get_cti_A_components(A_norms, T=T, rho=rho, dt=dt)
-    else:
-        M, E11, E12, Ad, S, B_T, dd_op = intermediates
+    """ assumes multi A: TODO fix"""
+    assert x0s.shape == xfs.shape
 
-# with Timer("move to jnp") as t:
-    x0s_b = jnp.array(x0s.reshape(*x0s.shape, 1))
-    xfs_b = jnp.array(xfs.reshape(*xfs.shape, 1))
+    n_batch, n_nodes = x0s.shape 
+    n_A = A_norms.shape[0] if A_norms.ndim == 3 else 1
+    n_integrate = int(numpy.round(T / dt) + 1)
 
-# with Timer("initialize") as t:
-    xrs_b = jnp.zeros(x0s_b.shape)
-    zero_array = jnp.zeros(xrs_b.shape)
+    CTI_core = _CTI_core_funcs(n_nodes, n_batch, n_A, n_integrate)
 
-    n_batch, n_nodes = x0s.shape
-    n_integrate_steps = int(numpy.round(T / dt) + 1)
-
-# with Timer("intermediates") as t:
-    c = jnp.concatenate([zero_array, 2 * S @ xrs_b], axis=1)
-    c = jnp.linalg.solve(M, c)
-    
-    dd = xfs_b - (E11 @ x0s_b) - (dd_op @ c)
-    l0 = jnp.linalg.solve(E12, dd)
-
-    # Make Big matrices
-    big_I = jnp.eye(2 * n_nodes)
-    Bd = (Ad - big_I) @ c
-
-# with Timer("integrate") as t:
-    # Integrate trajectory
-    # z = jnp.zeros((n_batch, 2 * n_nodes, n_integrate_steps))
-    z = jnp.zeros((n_integrate_steps, n_batch, 2 * n_nodes))
-    z = CTI_INTEGRATE_FUNCTIONS[n_integrate_steps](z, x0s_b, l0, Ad, Bd)
-    z = z.tranpose(1, 2, 0)
-# with Timer("final math") as t:
-    x = z[:, :n_nodes, :]
-    # u = (- B_T @ z[:, n_nodes:, :]) / (2 * rho)
-    # E = jnp.trapezoid(u ** 2, axis=1).sum(axis=1)
-    u, E, err = cti_final_math(x[:, :, -1:], z[:, n_nodes:, :], xfs_b, E12, l0, dd, B_T, rho)
-
-# with Timer("error calculations") as t:
-#     err_xf = jnp.linalg.norm(x[:, :, -1:] - xfs_b, axis=1)
-#     err_costate = jnp.linalg.norm(E12 @ l0 - dd, axis=1)
-#     err = jnp.concatenate([err_xf, err_costate], axis=1)
-    
-# with Timer("final outputs") as t:
-    x = x.transpose(0, 2, 1)
-    u = u.transpose(0, 2, 1)
-    # E, x, u, err = jnp.array(E), jnp.array(x.transpose(0, 2, 1)), jnp.array(u.transpose(0, 2, 1)), jnp.array(err)
-
-    return E, x, u, err
-
-    # return jnp.array(E), jnp.array(x.transpose(0, 2, 1)), jnp.array(u.transpose(0, 2, 1)), jnp.array(err)
+    return CTI_core(A_norms, x0s, xfs, T, dt, rho)

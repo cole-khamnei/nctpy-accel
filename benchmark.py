@@ -185,7 +185,7 @@ def test_cti_block_speed():
     print("Running block speed tests:")
     n_nodes = 400
     n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-    n_batch = 70
+    n_batch = 20
     print(n_batch)
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
@@ -212,8 +212,8 @@ def main():
     # test_cti_accuracy("torch")
     # test_cti_accuracy("jax")
     
-    test_cti_block_accuracy("jax")
-    # test_cti_block_speed()
+    # test_cti_block_accuracy("jax")
+    test_cti_block_speed()
     # test_cti_single_event_speed()
 
 
