@@ -178,13 +178,13 @@ def test_cti_block_speed():
     """ """
     n_nodes = 400
     n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-
+    print(n_batch)
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
     n_reps = 100
     for _ in tqdm(range(n_reps), desc="testing torch cti block"):
-        te.get_cti_block(A_norms, x0s, xfs)
+        te.get_cti_block(A_norms, x0s, xfs, device="cuda")
 
     for _ in tqdm(range(n_reps), desc="testing jax cti block"):
         je.get_cti_block(A_norms, x0s, xfs)
