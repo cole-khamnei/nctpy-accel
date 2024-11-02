@@ -250,9 +250,9 @@ def main():
     print("Running benchmark tests:\n")
     # test_cti_accuracy("torch")
     # test_cti_accuracy("jax")
-    # test_cti_block_accuracy("jax")
+    test_cti_block_accuracy("jax")
     # test_cti_single_event_speed()
-    test_cti_block_speed()
+    # test_cti_block_speed()
 
     # tests = [test_matrix_norms]
     # for test in tests:
