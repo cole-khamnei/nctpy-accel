@@ -165,9 +165,9 @@ def build_cti_integrate(n_integrate_steps):
 
         def body_fun(i, z):
             z_i = (Ad @ jnp.expand_dims(z[i - 1], 2) + Bd).squeeze()
-            return z
-            # return z.at[i].set(z_i)
-        # z = jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
+            # return z
+            return z.at[i].set(z_i)
+        z = jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
         # jax.lax.fori_loop(1, n_integrate_steps, body_fun, z)
         return z
 
