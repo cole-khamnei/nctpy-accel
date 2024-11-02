@@ -58,34 +58,52 @@ def matrix_norm(A, c=1, system="continuous"):
         return matrix_dnorm(A, c)
 
 
-def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch):
+def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
 
-    I = jnp.eye(n_nodes)
-    big_I = jnp.eye(2 * n_nodes)
-    zero_array = jnp.zeros((n_nodes, 1))
     xr = jnp.zeros((n_nodes, 1))
+    concat_dim = 2 if n_A > 0 else 1
+    to_batch = lambda *tensors: (jnp.tile(jnp.expand_dims(t_i, 0), (n_A, 1, 1)) for t_i in tensors)
 
     def compute_dynamics_matrices(A_norm, S, B, T, dt, rho):
-        M = jnp.concatenate((jnp.concatenate((A_norm, (-B @ B.T) / (2 * rho)), axis=1),
-                             jnp.concatenate((-2 * S, -A_norm.T), axis=1)))
-        c = jnp.concatenate([zero_array, 2 * S @ xr], axis=0)
+
+        B_T = B
+        I = jnp.eye(n_nodes)
+        big_I = jnp.eye(2 * n_nodes)
+        zero_array = jnp.zeros((n_nodes, 1))
+
+        S_xr = S @ xr
+
+        if n_A > 0:
+            B, B_T, S, I, S_xr, zero_array = to_batch(B, B_T, S, I, S_xr, zero_array)
+            A_norm_T = A_norm.transpose(0, 2, 1)
+        else:
+            A_norm_T = A_norm.T
+
+        M = jnp.concatenate((jnp.concatenate((A_norm, (-B @ B_T) / (2 * rho)), axis=concat_dim),
+                             jnp.concatenate((-2 * S, -A_norm_T), axis=concat_dim)),
+                             axis=concat_dim - 1)
+
+        c = jnp.concatenate([zero_array, 2 * S_xr], axis=concat_dim - 1)
         c = jnp.linalg.solve(M, c)
 
         Ad = jax.scipy.linalg.expm(M * dt) 
-        Bd = ((Ad - big_I) @ c).reshape(-1)
+        Bd = ((Ad - big_I) @ c).squeeze()
 
         E = jax.scipy.linalg.expm(M * T)
         # E = jnp.linalg.matrix_power(Ad, n_integrate)
 
-        E11 = E[:n_nodes][:, :n_nodes]
-        E12 = E[:n_nodes][:, n_nodes:]
+        if n_A > 0:
+            E11, E12 = E[:, :n_nodes, :n_nodes], E[:, :n_nodes, n_nodes:]
+        else:
+            E11, E12 = E[:n_nodes][:, :n_nodes], E[:n_nodes][:, n_nodes:]
+            
 
-        dd_bias = jnp.concatenate([E11 - I, E12], axis=1) @ c
+        dd_bias = jnp.concatenate([E11 - I, E12], axis=concat_dim) @ c
 
-        if n_batch > 0:
+        if n_batch > 0 and n_A == 0:
             Ad = jnp.tile(Ad, (n_batch, 1, 1))
 
-        return Ad, Bd, E11, E12, dd_bias, B.T
+        return Ad, Bd, E11, E12, dd_bias, B_T
 
     return jax.jit(compute_dynamics_matrices)
 
@@ -136,7 +154,7 @@ def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, dt=0.001, rho=1):
     B = I if B is None else jnp.array(B)
     S = I if S is None else jnp.array(S)
 
-    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, 0)
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, 0, 0)
     compute_single_trajectory = _compute_single_trajectory_funcs(n_nodes, n_integrate)
 
     dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
@@ -329,13 +347,14 @@ def get_control_inputs_multi(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rh
     """ """
     n_nodes = A_norm.shape[-1]
     n_integrate = int(numpy.round(T / dt) + 1)
-    n_batch = len(x0s)
+    n_batch = len(x0s) if x0s.ndim == 2 else 0
+    n_A = A_norm.shape[0] if A_norm.ndim == 3 else 0
 
     I = jnp.eye(n_nodes)
     B = I if B is None else jnp.array(B)
     S = I if S is None else jnp.array(S)
 
-    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, n_batch)
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, n_batch, n_A)
     dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
 
     compute_block_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)

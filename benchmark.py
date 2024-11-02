@@ -154,7 +154,7 @@ def test_cti_single_event_speed():
     #     nct_e.get_control_inputs(A_norm, T, B, x0, xf, system=system)
     #     pbar.update(1)
     
-    n_batch = n_batch * 10
+    n_batch = n_batch * 5
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes, system=system)
 
@@ -174,7 +174,7 @@ def test_cti_single_event_speed():
         pbar.update(len(x0s))
     pbar.close()
 
-    pbar = tqdm(total=len(x0s), desc="NCT-JAX  ")
+    pbar = tqdm(total=len(A_norms), desc="NCT-JAX  ")
     for A_norm, x0, xf in zip(A_norms, x0s, xfs):
         je.get_control_inputs(A_norms[0], x0, xf)
         pbar.update(1)
@@ -250,8 +250,8 @@ def main():
     print("Running benchmark tests:\n")
     # test_cti_accuracy("torch")
     # test_cti_accuracy("jax")
-    test_cti_block_accuracy("jax")
-    # test_cti_single_event_speed()
+    # test_cti_block_accuracy("jax")
+    test_cti_single_event_speed()
     # test_cti_block_speed()
 
     # tests = [test_matrix_norms]
