@@ -158,6 +158,8 @@ def test_cti_single_event_speed():
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes, system=system)
 
+
+
     # pbar = tqdm(total=len(x0s), desc="NCT-TORCH")
     # for A_norm, x0, xf in zip(A_norms, x0s, xfs):
     #     te.get_control_inputs(A_norm, x0, xf, device="cuda")
@@ -165,6 +167,9 @@ def test_cti_single_event_speed():
 
     with je.Timer("JAX compilation:") as t:
         je.get_control_inputs(A_norms[0], x0s[0], xfs[0])
+
+    with je.Timer("JAX compilation:") as t:
+        je.get_control_inputs_multi(A_norms[0], x0s[0], xfs[0])
 
     n_reps = 10
     x0s, xfs = get_random_states(n_nodes, n_batch * 3)

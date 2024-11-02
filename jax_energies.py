@@ -360,12 +360,4 @@ def get_control_inputs_multi(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rh
     compute_block_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)
 
     return compute_block_trajectory(A_norm, dynamics_matrices, x0s, xfs, T, dt, rho)
-    # E_s, x_s, u_s, err_s = [], [], [], []
-    # pbar = tqdm(total=len(x0s), desc="CTI multi jax:")
-    # for x0, xf in zip(x0s, xfs):
-    #     E, x, u, err = compute_single_trajectory(A_norm, dynamics_matrices, x0, xf, B, rho)
-    #     E_s.append(E), x_s.append(x), u_s.append(u), err_s.append(err)
-    #     pbar.update(1)
-
-    # return numpy.array(E_s), numpy.array(x_s), numpy.array(u_s), numpy.array(err_s)
 
