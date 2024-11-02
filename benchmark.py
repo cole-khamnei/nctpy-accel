@@ -191,8 +191,8 @@ def test_cti_block_accuracy(backend_str):
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
-    # A_si = slice(None, None)
-    A_si = 0
+    A_si = slice(None, None)
+    # A_si = 0
 
     n_reps = 1
     for i in range(n_reps):
