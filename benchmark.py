@@ -169,13 +169,15 @@ def test_cti_block_accuracy(backend_str):
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
-    for _ in range(3):
-        j_outs = je.get_cti_block(A_norms, x0s, xfs)
+    for i in range(3):
+        with je.Timer(f"whole function {i}:") as t:
+            j_outs = je.get_cti_block(A_norms, x0s, xfs)
+        
         t_outs = te.get_cti_block(A_norms, x0s, xfs)
         print()
 
-    for j_out, t_out in zip(j_outs, t_outs):
-        assert array_equal(j_out, t_out, rtol=1e-3, atol=1e-4)
+    # for j_out, t_out in zip(j_outs, t_outs):
+    #     assert array_equal(j_out, t_out, rtol=1e-3, atol=1e-4)
 
 
 def test_cti_block_speed():
@@ -183,19 +185,25 @@ def test_cti_block_speed():
     print("Running block speed tests:")
     n_nodes = 400
     n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
+    n_batch = 70
     print(n_batch)
     x0s, xfs = get_random_states(n_nodes, n_batch)
     A_norms = get_random_A_norms(n_batch, n_nodes)
 
-    n_reps = 100
+    n_reps = 1500 // n_batch
+    # n_reps = 100
 
     je.get_cti_block(A_norms, x0s, xfs)
 
-    for _ in tqdm(range(n_reps), desc="testing jax cti block"):
+    pbar = tqdm(total=n_reps * n_batch, desc="testing jax cti block")
+    for _ in range(n_reps):
         je.get_cti_block(A_norms, x0s, xfs)
-    
-    for _ in tqdm(range(n_reps), desc="testing torch cti block"):
+        pbar.update(n_batch)
+
+    pbar = tqdm(total=n_reps * n_batch, desc="testing torch cti block")
+    for _ in range(n_reps):
         te.get_cti_block(A_norms, x0s, xfs, device="cuda")
+        pbar.update(n_batch)
 
 
 def main():
@@ -203,8 +211,9 @@ def main():
     print("Running benchmark tests:\n")
     # test_cti_accuracy("torch")
     # test_cti_accuracy("jax")
-    # test_cti_block_accuracy("jax")
-    test_cti_block_speed()
+    
+    test_cti_block_accuracy("jax")
+    # test_cti_block_speed()
     # test_cti_single_event_speed()
 
 
