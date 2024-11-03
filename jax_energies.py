@@ -6,8 +6,17 @@ import jax.numpy as jnp
 from tqdm.auto import tqdm
 from utils import Timer
 
-VALID_SYSTEMS = ["discrete", "continuous"]
 
+# ------------------------------------------------------------------- #
+# --------------------    JAX Precompile LUT     -------------------- #
+# ------------------------------------------------------------------- #
+"""
+Fairly certain there is a better way to do this with JAX, as it auto-registers functions
+with hash, tried @partial with staticargs which worked, but this was quicker to implement.
+
+May change in future.
+
+"""
 
 class CompiledFunctionSet():
     def __init__(self, make_function, initial_args=[], make_key=None):
@@ -22,9 +31,9 @@ class CompiledFunctionSet():
         return self.compiled_versions[key]
 
 
-def system_check(system):
-    """ """
-    assert system in VALID_SYSTEMS, f"Invalid system '{system}', valid sytems: {VALID_SYSTEMS}"
+# ------------------------------------------------------------------- #
+# --------------------     JAX NCTPY Utils      -------------------- #
+# ------------------------------------------------------------------- #
 
 
 @jax.jit
@@ -43,8 +52,13 @@ def matrix_cnorm(A, c):
 
 def matrix_norm(A, c=1, system="continuous"):
     """ """
-    system_check(system)
+    utils.system_check(system)
     return matrix_cnorm(A, c) if system == 'continuous' else matrix_dnorm(A, c)
+
+
+# ------------------------------------------------------------------- #
+# ----------------   Control Input Build Functions    --------------- #
+# ------------------------------------------------------------------- #
 
 
 def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
@@ -126,7 +140,9 @@ def build_compute_single_trajectory(n_nodes, n_integrate):
 _compute_single_trajectory_funcs = CompiledFunctionSet(build_compute_single_trajectory)
 
 
-########################################## Block Matrices #########################################################
+# ------------------------------------------------------------------- #
+# --------------------    Block Trajectory       -------------------- #
+# ------------------------------------------------------------------- #
 
 
 def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
@@ -174,7 +190,9 @@ def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
 _compute_block_trajectory_funcs = CompiledFunctionSet(build_compute_block_trajectory)
 
 
-########################################## Main Control Signal Function ##############################################
+# ------------------------------------------------------------------- #
+# --------------------    Control Input Func     -------------------- #
+# ------------------------------------------------------------------- #
 
 
 def get_control_inputs(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1):
@@ -197,3 +215,8 @@ def get_control_inputs(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1):
         compute_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)
 
     return compute_trajectory(A_norm, dynamics_matrices, x0s, xfs, rho)
+
+
+# ------------------------------------------------------------------- #
+# --------------------            End            -------------------- #
+# ------------------------------------------------------------------- #
