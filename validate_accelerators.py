@@ -7,10 +7,19 @@ from nctpy import energies as nct_e
 
 import numpy as np
 
+import utils
 from utils import Timer
 from tqdm.auto import tqdm
 
-NP_CLOSE_PARAMS = dict(rtol=1e-05, atol=1e-05)
+
+# ------------------------------------------------------------------- #
+# --------------------    Validation Helpers     -------------------- #
+# ------------------------------------------------------------------- #
+
+
+def get_relative_error(A, B):
+    """ """
+    return np.abs(A - B) / (A + (A == 0))
 
 
 def array_equal(A, B, show=True, rtol=1e-05, atol=1e-05):
@@ -21,22 +30,21 @@ def array_equal(A, B, show=True, rtol=1e-05, atol=1e-05):
     if show and not value:
         diff = A - B
         rel_diff = np.abs(diff / (A + (A == 0))) * 100
-        print("A:", A)
-        print("B:", B)
+        # print("A:", A)
+        # print("B:", B)
         print(diff)
         print(rel_diff)
-        print(close)
+        # print(close)
         print(rel_diff.mean(axis=0).shape, rel_diff.mean(axis=0))
-        # print(close.mean(axis=1).shape, close.mean(axis=1))
         print("Average absolute difference (%):", np.mean(np.abs(diff)))
         print("Average relative difference (%):", np.mean(rel_diff))
         print(np.prod(A.shape) - np.sum(close * 1), (1 - np.mean(close * 1)), "wrong values")
     return value
 
 
-def get_relative_error(A, B):
-    """ """
-    return np.abs(A - B) / (A + (A == 0) + 1)
+# ------------------------------------------------------------------- #
+# --------------------     Test NCT Helpers      -------------------- #
+# ------------------------------------------------------------------- #
 
 
 def get_random_states(n_nodes, n_batch, seed=1):
@@ -48,11 +56,18 @@ def get_random_states(n_nodes, n_batch, seed=1):
     return x0s, xfs
 
 
-def get_random_A_set(n_batch, n_nodes, seed=1):
+def get_random_A_set(n_batch, n_nodes, seed=1, symmetric=True):
     """ """
     np.random.seed(seed)
     A_rand_set = np.random.randn(n_batch, n_nodes, n_nodes) * 1000
-    A_rand_set = np.array([np.tril(a) + np.tril(a, -1).T for a in A_rand_set])
+
+    if symmetric == "mixed":
+        for i in range(len(A_rand_set)):
+            if np.random.randint(0, 2) == 1:
+                A_rand_set[i] = np.tril(A_rand_set[i]) + np.tril(A_rand_set[i], -1).T
+
+    elif symmetric:
+        A_rand_set = np.array([np.tril(a) + np.tril(a, -1).T for a in A_rand_set])
 
     return A_rand_set
 
@@ -61,7 +76,7 @@ def get_random_A_norms(n_batch, n_nodes, seed=1, system="continuous"):
     """ """
     np.random.seed(seed)
     A_set = get_random_A_set(n_batch, n_nodes, seed=seed)
-    return np.array([te.matrix_norm(A_i, c=1, system=system) for A_i in A_set])
+    return np.array([je.matrix_norm(A_i, c=1, system=system) for A_i in A_set])
 
 
 def get_NCT_args_set(n_batch, n_nodes, seed = 1, system = "continuous"):
@@ -71,22 +86,23 @@ def get_NCT_args_set(n_batch, n_nodes, seed = 1, system = "continuous"):
     return A_norms, x0s, xfs
 
 
+# ------------------------------------------------------------------- #
+# --------------------     Test Matrix Norms     -------------------- #
+# ------------------------------------------------------------------- #
+
+
 def test_matrix_norms():
     """ """
     n_batch = 10
     n_nodes = 400
     A_set = get_random_A_set(n_batch, n_nodes)
 
-
-    system = "continuous"
-    c = 1
-
-    for system in te.VALID_SYSTEMS:
+    for system in utils.VALID_SYSTEMS:
         for c in tqdm([1, 1.5, 3], desc="Testing matrix_norm with various c's:", leave=False):
             normed_A_base = np.array([nct_utils.matrix_normalization(A_i, c=c, system=system) for A_i in A_set])
+
             normed_A_torch = np.array([te.matrix_norm(A_i, c=c, system=system) for A_i in A_set])
             assert array_equal(normed_A_base, normed_A_torch)
-
             normed_A_jax = np.array([je.matrix_norm(A_i, c=c, system=system) for A_i in A_set])
             assert array_equal(normed_A_base, normed_A_jax, show=True)
 
@@ -94,14 +110,27 @@ def test_matrix_norms():
 def test_matrix_norm_speed():
     """ """
     n_nodes = 400
-    n_batch = 20
-    A_set = get_random_A_set(n_batch, n_nodes)
-    [nct_utils.matrix_normalization(A_i, system="continuous") for A_i in tqdm(A_set, desc="base")]
+    print("Testing A Matrix Normalization Speeds:")
 
-    n_batch = 500
-    A_set = get_random_A_set(n_batch, n_nodes)
-    [te.matrix_norm(A_i) for A_i in tqdm(A_set, desc="torch")]
-    [je.matrix_norm(A_i) for A_i in tqdm(A_set, desc="jax")]
+    je.matrix_norm(np.random.randn(n_nodes, n_nodes))
+
+    for symmetric, A_label in zip([True, False, "mixed"], ["symmetric", "asymmetric", "mixed symmetry"]):
+        print(f"  {A_label.title()} A Matrices:")
+        A_set = get_random_A_set(20, n_nodes, symmetric=symmetric)
+        kwargs = dict(system="continuous")
+        [nct_utils.matrix_normalization(A_i, **kwargs) for A_i in tqdm(A_set, desc=f"    NCT-Base: {A_label}")]
+
+        n_batch = 200 if symmetric == True else 20
+        A_set = get_random_A_set(n_batch, n_nodes, symmetric=symmetric)
+        if symmetric == True:
+            [utils.symmetric_matrix_norm(A_i) for A_i in tqdm(A_set, desc=f"    NCT-EIGH: {A_label}")]
+        [je.matrix_norm(A_i) for A_i in tqdm(A_set, desc=f"    NCT-JAX : {A_label}")]
+        print()
+
+
+# ------------------------------------------------------------------- #
+# --------------------            End            -------------------- #
+# ------------------------------------------------------------------- #
 
 
 def test_cti_accuracy(backend_str):
@@ -185,6 +214,11 @@ def test_cti_single_event_speed():
     print()
 
 
+# ------------------------------------------------------------------- #
+# --------------------            End            -------------------- #
+# ------------------------------------------------------------------- #
+
+
 def test_cti_block_accuracy():
     """ """
     n_nodes = 400
@@ -236,9 +270,15 @@ def test_cti_block_speed():
         pbar.close()
 
 
+# ------------------------------------------------------------------- #
+# --------------------           Main            -------------------- #
+# ------------------------------------------------------------------- #
+
+
 def main():
     """ """
     print("\nRunning Accelerated NCT validation tests:")
+    test_matrix_norm_speed()
     test_cti_accuracy("torch")
     test_cti_accuracy("jax")
     test_cti_single_event_speed()
@@ -248,3 +288,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# ------------------------------------------------------------------- #
+# --------------------            End            -------------------- #
+# ------------------------------------------------------------------- #

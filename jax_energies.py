@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 
 from tqdm.auto import tqdm
-from utils import Timer
 
+import utils
 
 # ------------------------------------------------------------------- #
 # --------------------    JAX Precompile LUT     -------------------- #
@@ -35,25 +35,31 @@ class CompiledFunctionSet():
 # --------------------     JAX NCTPY Utils      -------------------- #
 # ------------------------------------------------------------------- #
 
+@jax.jit
+def check_symmetric(a, rtol=1e-05, atol=1e-08):
+    return jnp.allclose(a, a.T, rtol=rtol, atol=atol)
+
 
 @jax.jit
-def matrix_dnorm(A, c):
+def eigh_norm(A, c):
     """ """
     w, _ = jnp.linalg.eigh(A)
-    l = jnp.abs(w).max()
-    return A / (c + l)
+    return A / (c + jnp.abs(w).max())
 
 
-@jax.jit
-def matrix_cnorm(A, c):
+def eig_norm(A, c):
     """ """
-    return matrix_dnorm(A, c) - jnp.eye(A.shape[0])
+    w, _ = numpy.linalg.eig(A)
+    return A / (c + jnp.abs(w).max())
 
 
-def matrix_norm(A, c=1, system="continuous"):
+def matrix_norm(A, c=1, system="continuous", symmetric=False):
     """ """
-    utils.system_check(system)
-    return matrix_cnorm(A, c) if system == 'continuous' else matrix_dnorm(A, c)
+    utils.check_system(system)
+    
+    # eig_normed_A = eig_norm(A, c)
+    eig_normed_A = eigh_norm(A, c) if check_symmetric(A) or symmetric else eig_norm(A, c)
+    return eig_normed_A - jnp.eye(A.shape[0]) if system == 'continuous' else eig_normed_A
 
 
 # ------------------------------------------------------------------- #

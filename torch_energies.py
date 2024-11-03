@@ -12,7 +12,12 @@ import h5py
 from time import time
 from tqdm.auto import tqdm
 
-VALID_SYSTEMS = ["discrete", "continuous"]
+import utils
+
+# ------------------------------------------------------------------- #
+# --------------------       Torch Utils.        -------------------- #
+# ------------------------------------------------------------------- #
+
 
 def get_device_type(device):
     """ """
@@ -41,25 +46,12 @@ def get_device(device=None):
     return torch.device(default)
 
 
-def matrix_norm(A, c=1, system="continuous"):
-    """ """
-    assert system in VALID_SYSTEMS, f"Invalid system '{system}', valid sytems: {VALID_SYSTEMS}"
-
-    # eigenvalue decomposition
-    w, _ = np.linalg.eigh(A)
-    l = np.abs(w).max()
-
-    # Matrix normalization for discrete-time systems
-    A_norm = A / (c + l)
-
-    if system == 'continuous':
-        # for continuous-time systems
-        A_norm = A_norm - np.eye(A.shape[0])
-
-    return A_norm
+# ------------------------------------------------------------------- #
+# --------------------         CTI Inputs        -------------------- #
+# ------------------------------------------------------------------- #
 
 
-def get_cti_torch(A_norm, x0, xf, B=None, S=None, T=1, rho=1, dt = 0.001, device="cpu", **extras):
+def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, rho=1, dt = 0.001, device="cpu", **extras):
     """ """
     devp = dict(device=torch.device(device))
     n_nodes = A_norm.shape[0]
@@ -117,7 +109,10 @@ def get_cti_torch(A_norm, x0, xf, B=None, S=None, T=1, rho=1, dt = 0.001, device
 
     return float(E), x.T.cpu().numpy(), u.T.cpu().numpy(), [float(err_costate), float(err_xf)]
 
-get_control_inputs = get_cti_torch
+
+# ------------------------------------------------------------------- #
+# --------------------      Block Functions      -------------------- #
+# ------------------------------------------------------------------- #
 
 
 def get_cti_A_components(A_norm, T=1, rho=1, dt = 0.001, device="cpu", **extras):
@@ -204,6 +199,11 @@ def get_cti_block(A_norms, x0s, xfs, T=1, rho=1, dt = 0.001, device="cpu", inter
     return E.cpu().numpy(), x.transpose(1, 2).cpu().numpy(), u.transpose(1, 2).cpu().numpy(), err
 
 
+# ------------------------------------------------------------------- #
+# --------------------         CTI Batch         -------------------- #
+# ------------------------------------------------------------------- #
+
+
 def get_max_batch_size(n_nodes, device):
     """ """
     if get_device_type(device) != "cuda":
@@ -255,6 +255,11 @@ def get_cti_batch(A_norms, x0s, xfs, T=1, dt=0.001, rho=1, device=None, pbar_kws
     return E_s, x_s, u_s, err_s
 
 
+# ------------------------------------------------------------------- #
+# --------------------     Trajectory Analog     -------------------- #
+# ------------------------------------------------------------------- #
+
+
 def calc_trajectories(subjects, A_set, ntf_array, subj_save_path, device=None, use_pkl=False):
     """ """
 
@@ -280,6 +285,11 @@ def calc_trajectories(subjects, A_set, ntf_array, subj_save_path, device=None, u
                 dset = f.create_dataset("err_s", data=err_s)
 
         pbar.update(1)
+
+
+# ------------------------------------------------------------------- #
+# ---------    NCT Calculation IO pkling for Experiements   --------- #
+# ------------------------------------------------------------------- #
 
 
 def write_control_pkl(pkl_path, subjects, A_set, ntf_array):
@@ -310,73 +320,6 @@ def calculate_control_pkl(control_pkl_path: str, pkl_path_uf: str, device=None):
     subjects, A_set, ntf_array = load_control_pkl(control_pkl_path)
     print("Loading control pkl: done")
     calc_trajectories(subjects, A_set, ntf_array, pkl_path_uf, device=None)
-
-
-def norm(A, c=1):
-    A = torch.tensor(A.astype("float32"), device="cpu")
-    c = torch.tensor(c, device="cpu")
-    w, _ = torch.linalg.eigh(A)
-    l = torch.abs(w).max()
-
-    # Matrix normalization for discrete-time systems
-    A_norm = A / (c + l)
-    A_norm = A_norm - torch.eye(A.shape[0], device="cpu")
-
-    return A_norm.cpu().numpy()
-
-
-# ------------------------------------------------------------------- #
-# --------------------   Machine Tests  - remove -------------------- #
-# ------------------------------------------------------------------- #
-
-
-def machine_tests():
-    """ """
-    print("Testing t_energies")
-    n_nodes = 400
-    n_batch = get_max_batch_size(n_nodes, device=get_device())
-
-    A_set = np.random.randn(n_batch, n_nodes, n_nodes)
-    A_norms = np.array([norm(A_i) for A_i in tqdm(A_set, desc="norming As")])
-
-    x0s = np.array([x / np.linalg.norm(x) for x in np.random.randn(n_batch, n_nodes)])
-    xfs = np.array([x / np.linalg.norm(x) for x in np.random.randn(n_batch, n_nodes)])
-
-    if n_batch <= 10:
-        print("\nCPU non-batched:")
-        start = time()
-        [get_cti_torch(*args, device="cpu") for args in zip(A_norms, x0s, xfs)];
-        print(f"CPU non-batched time: {time() - start: 0.2f}s")
-
-        print("\nCPU Batch run:")
-        start = time()
-        get_cti_block(A_norms, x0s, xfs, device="cpu")
-        print(f"CPU Batch time: {time() - start: 0.2f}s")
-
-    if torch.backends.mps.is_available():
-        print("\nMPS Batch run:")
-        start = time()
-        get_cti_block(A_norms, x0s, xfs, device="mps")
-        print(f"MPS Batch time: {time() - start: 0.2f}s")
-
-        print("\nMPS non-batched:")
-        start = time()
-        [get_cti_torch(*args, device="mps") for args in zip(A_norms, x0s, xfs)];
-        print(f"MPS non-batched time: {time() - start: 0.2f}s")
-
-    if torch.cuda.is_available():
-        print("\nCUDA Batch run:")
-        start = time()
-        get_cti_block(A_norms, x0s, xfs, device="cuda")
-        delta = time() - start
-        print(f"CUDA Batch time: {delta: 0.2f}s ({n_batch / delta:0.2f})\n")
-
-        print("\nCUDA non-batched:")
-        start = time()
-        [get_cti_torch(*args, device="cuda") for args in zip(A_norms, x0s, xfs)];
-        delta = time() - start
-        print(f"CUDA non-batched time: {delta: 0.2f}s ({n_batch / delta:0.2f})\n")
-
 
 
 def get_arguments():

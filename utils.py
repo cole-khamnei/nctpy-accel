@@ -1,4 +1,5 @@
 import time
+import numpy as np
 
 # ------------------------------------------------------------------- #
 # --------------------      Random Helpers       -------------------- #
@@ -29,9 +30,29 @@ class Timer:
 VALID_SYSTEMS = ["discrete", "continuous"]
 
 
-def system_check(system):
+def check_system(system):
     """ """
     assert system in VALID_SYSTEMS, f"Invalid system '{system}', valid sytems: {VALID_SYSTEMS}"
+
+
+# ------------------------------------------------------------------- #
+# --------------------         NCT Utils         -------------------- #
+# ------------------------------------------------------------------- #
+
+
+def symmetric_matrix_norm(A, c=1, system="continuous"):
+    """ """
+    check_system(system)
+    w, _ = np.linalg.eigh(A)
+    l = np.abs(w).max()
+
+    # Matrix normalization for discrete-time systems
+    A_norm = A / (c + l)
+    if system == 'continuous':
+        # for continuous-time systems
+        A_norm = A_norm - np.eye(A.shape[0])
+
+    return A_norm
 
 
 # ------------------------------------------------------------------- #
