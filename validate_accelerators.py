@@ -1,5 +1,5 @@
 import jax_energies as je
-import t_energies as te
+import torch_energies as te
 
 import nctpy
 from nctpy import utils as nct_utils
@@ -129,7 +129,7 @@ def test_matrix_norm_speed():
 
 
 # ------------------------------------------------------------------- #
-# --------------------            End            -------------------- #
+# ---------------      Single CTI Function Tests      --------------- #
 # ------------------------------------------------------------------- #
 
 
@@ -153,7 +153,7 @@ def test_cti_accuracy(backend_str):
     B = np.eye(n_nodes)
 
     x_errors, u_errors = [], []
-    pbar = tqdm(total=len(x0s), desc=f"Checking {backend.__name__} control inputs accuracy")
+    pbar = tqdm(total=len(x0s), desc=f"Checking {backend.__name__}.py control inputs accuracy")
     for A_norm, x0, xf in zip(A_norms, x0s, xfs):
         E_b, x_b, u_b, err_b = backend.get_control_inputs(A_norm, x0, xf, T=T)
         x, u, err = nct_e.get_control_inputs(A_norm, T, B, x0, xf, system=system)
@@ -187,10 +187,8 @@ def test_cti_single_event_speed():
     n_batch = 20
     A_norms, x0s, xfs = get_NCT_args_set(n_batch, n_nodes, seed=1)
     
-    print("Testing single A, single state speeds:")
-    with Timer("JAX precompilation:") as t:
-        je.get_control_inputs(A_norms[0], x0s[0], xfs[0])
-    print()
+    print("Testing Single A - Single State Speeds:")
+    je.get_control_inputs(A_norms[0], x0s[0], xfs[0])
 
     pbar = tqdm(total=len(x0s), desc="NCTPY    ")
     for A_norm, x0, xf in zip(A_norms, x0s, xfs):
@@ -215,7 +213,7 @@ def test_cti_single_event_speed():
 
 
 # ------------------------------------------------------------------- #
-# --------------------            End            -------------------- #
+# --------------------      Block CTI Tests      -------------------- #
 # ------------------------------------------------------------------- #
 
 
@@ -234,6 +232,7 @@ def test_cti_block_accuracy():
         for j_out, t_out in zip(j_outs, t_outs):
             assert array_equal(j_out, t_out, rtol=1e-3, atol=1e-3)
         print(f"  Block method with {label}: accurate.")
+    print()
 
 
 def test_cti_block_speed():
@@ -245,11 +244,8 @@ def test_cti_block_speed():
     n_batch = 80
     n_reps = n_samples // n_batch
     A_norms, x0s, xfs = get_NCT_args_set(n_batch, n_nodes, seed=32)
-
-    with Timer() as t:
-        je.get_control_inputs(A_norms[0], x0s, xfs)
+    je.get_control_inputs(A_norms[0], x0s, xfs)
     
-
     for A_si, A_label in zip([0, slice(None, None)], ["single", "multiple"]):
 
         pbar = tqdm(total=n_reps * n_batch, desc=f"NCT-JAX   ({A_label} A | multiple states | batch_size: {n_batch}):")
@@ -268,6 +264,7 @@ def test_cti_block_speed():
             te.get_cti_block(A_norms[A_si], x0s, xfs, device="cuda")
             pbar.update(n_batch)
         pbar.close()
+    print()
 
 
 # ------------------------------------------------------------------- #
