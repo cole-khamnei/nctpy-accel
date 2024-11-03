@@ -10,13 +10,7 @@ import dill as pickle
 import h5py
 
 from time import time
-
-import __main__ as main
-if not hasattr(main, '__file__'):
-    from tqdm.notebook import tqdm
-else:
-    from tqdm import tqdm
-
+from tqdm.auto import tqdm
 
 VALID_SYSTEMS = ["discrete", "continuous"]
 

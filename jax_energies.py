@@ -1,24 +1,12 @@
-import jax
-import jax.numpy as jnp
 import numpy
 
-import time
+import jax
+import jax.numpy as jnp
+
 from tqdm.auto import tqdm
+from utils import Timer
 
 VALID_SYSTEMS = ["discrete", "continuous"]
-
-class Timer:
-    def __init__(self, label=""):
-        self.label = label
-
-    def __enter__(self):
-        self.start = time.time()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.end = time.time()
-        self.duration = self.end - self.start
-        # print(f"Duration {self.label}: {self.duration:0.5f} seconds")
 
 
 class CompiledFunctionSet():
@@ -32,6 +20,11 @@ class CompiledFunctionSet():
         if key not in self.compiled_versions:
             self.compiled_versions[key] = self.make_function(*args)
         return self.compiled_versions[key]
+
+
+def system_check(system):
+    """ """
+    assert system in VALID_SYSTEMS, f"Invalid system '{system}', valid sytems: {VALID_SYSTEMS}"
 
 
 @jax.jit
@@ -50,16 +43,12 @@ def matrix_cnorm(A, c):
 
 def matrix_norm(A, c=1, system="continuous"):
     """ """
-    assert system in VALID_SYSTEMS, f"Invalid system '{system}', valid sytems: {VALID_SYSTEMS}"
-
-    if system == 'continuous':
-        return matrix_cnorm(A, c)
-    else:
-        return matrix_dnorm(A, c)
+    system_check(system)
+    return matrix_cnorm(A, c) if system == 'continuous' else matrix_dnorm(A, c)
 
 
 def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
-
+    """ """
     xr = jnp.zeros((n_nodes, 1))
     concat_dim = 2 if n_A > 0 else 1
     to_batch = lambda *tensors: (jnp.tile(jnp.expand_dims(t_i, 0), (n_A, 1, 1)) for t_i in tensors)
@@ -67,10 +56,7 @@ def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
     def compute_dynamics_matrices(A_norm, S, B, T, dt, rho):
 
         B_T = B
-        I = jnp.eye(n_nodes)
-        big_I = jnp.eye(2 * n_nodes)
-        zero_array = jnp.zeros((n_nodes, 1))
-
+        I, big_I, zero_array = jnp.eye(n_nodes), jnp.eye(2 * n_nodes), jnp.zeros((n_nodes, 1))
         S_xr = S @ xr
 
         if n_A > 0:
@@ -88,21 +74,16 @@ def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
 
         Ad = jax.scipy.linalg.expm(M * dt) 
         Bd = ((Ad - big_I) @ c).squeeze()
+        if n_batch > 0 and n_A == 0:
+            Ad = jnp.tile(Ad, (n_batch, 1, 1))
 
         E = jax.scipy.linalg.expm(M * T)
-        # E = jnp.linalg.matrix_power(Ad, n_integrate)
-
         if n_A > 0:
             E11, E12 = E[:, :n_nodes, :n_nodes], E[:, :n_nodes, n_nodes:]
         else:
             E11, E12 = E[:n_nodes][:, :n_nodes], E[:n_nodes][:, n_nodes:]
-            
 
         dd_bias = jnp.concatenate([E11 - I, E12], axis=concat_dim) @ c
-
-        if n_batch > 0 and n_A == 0:
-            Ad = jnp.tile(Ad, (n_batch, 1, 1))
-
         return Ad, Bd, E11, E12, dd_bias, B_T
 
     return jax.jit(compute_dynamics_matrices)
@@ -168,18 +149,9 @@ def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
         z0 = jnp.concatenate([x0s_b, l0], axis=1).squeeze()
         z = z.at[0].set(z0)
 
-        # Ad = jnp.expand_dims(Ad, 0)
-        # TODO: figure out why this fixes the large numerical errors
-        # Ad = jnp.tile(Ad, (n_batch, 1, 1))
-
         def integrate_step(i, z):
-            # print(z[i - 1].shape, Ad.shape, Bd.shape)
-
-            mult = Ad @ jnp.expand_dims(z[i - 1], -1)
-            # print(mult.shape)
-            add = mult.squeeze() + Bd
-            # print(add.shape)
-            return z.at[i].set(add)
+            z_i = (Ad @ jnp.expand_dims(z[i - 1], -1)).squeeze() + Bd
+            return z.at[i].set(z_i)
 
         z = jax.lax.fori_loop(1, n_integrate, integrate_step, z)
         z = z.transpose(1, 2, 0)
@@ -225,4 +197,3 @@ def get_control_inputs(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1):
         compute_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)
 
     return compute_trajectory(A_norm, dynamics_matrices, x0s, xfs, rho)
-
