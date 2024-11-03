@@ -168,14 +168,11 @@ def test_cti_single_event_speed():
     with je.Timer("JAX compilation:") as t:
         je.get_control_inputs(A_norms[0], x0s[0], xfs[0])
 
-    with je.Timer("JAX compilation:") as t:
-        je.get_control_inputs_multi(A_norms[0], x0s[0], xfs[0])
-
     n_reps = 10
     x0s, xfs = get_random_states(n_nodes, n_batch * 3)
     pbar = tqdm(total=len(x0s)*n_reps, desc="NCT-JAX Multi")
     for i in range(n_reps):
-        je.get_control_inputs_multi(A_norms[0], x0s, xfs)
+        je.get_control_inputs(A_norms[0], x0s, xfs)
         pbar.update(len(x0s))
     pbar.close()
 
@@ -203,7 +200,7 @@ def test_cti_block_accuracy(backend_str):
     for i in range(n_reps):
         with je.Timer(f"whole function {i}:") as t:
             # j_outs = je.get_cti_block(A_norms[A_si], x0s, xfs)
-            j_outs = je.get_control_inputs_multi(A_norms[A_si], x0s, xfs)
+            j_outs = je.get_control_inputs(A_norms[A_si], x0s, xfs)
         
         t_outs = te.get_cti_block(A_norms[A_si], x0s, xfs)
     #     print()
@@ -229,11 +226,11 @@ def test_cti_block_speed():
 
     n_reps = n_samples // n_batch
     # je.get_cti_block(A_norms, x0s, xfs)
-    je.get_control_inputs_multi(A_norms[0], x0s, xfs)
+    je.get_control_inputs(A_norms[0], x0s, xfs)
     
     pbar = tqdm(total=n_reps * n_batch, desc="testing jax cti block")
     for _ in range(n_reps):
-        je.get_control_inputs_multi(A_norms[0], x0s, xfs)
+        je.get_control_inputs(A_norms[0], x0s, xfs)
         pbar.update(n_batch)
     pbar.close()
 
@@ -254,9 +251,9 @@ def main():
     """ """
     print("Running benchmark tests:\n")
     # test_cti_accuracy("torch")
-    # test_cti_accuracy("jax")
+    test_cti_accuracy("jax")
     # test_cti_block_accuracy("jax")
-    test_cti_single_event_speed()
+    # test_cti_single_event_speed()
     # test_cti_block_speed()
 
     # tests = [test_matrix_norms]
