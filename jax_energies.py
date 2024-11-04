@@ -24,8 +24,11 @@ def matrix_norm(A, c=1, system="continuous"):
     return A_norm
 
 # @jax.jit
-def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, rho=1, n_integrate_steps=1001):
+def get_control_inputs(A_norm, x0, xf, B=None, S=None, T=1, rho=1, n_integrate_steps=1001, device="cpu"):
     """ """
+
+
+    jax.default_device(device)
     n_nodes = A_norm.shape[0]
     dt = jnp.array(T / (n_integrate_steps - 1))
     # n_integrate_steps = jnp.array(jnp.round(T / dt), int) + 1
