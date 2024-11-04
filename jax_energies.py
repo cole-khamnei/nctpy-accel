@@ -55,6 +55,9 @@ def eig_norm(A, c):
 
 def matrix_norm(A, c=1, system="continuous", symmetric=False):
     """ """
+    if A.ndim > 2:
+        return numpy.array([matrix_norm(A_i, c=1, system=system, symmetric=symmetric) for A_i in A])
+
     utils.check_system(system)
 
     # eig_normed_A = eig_norm(A, c)
