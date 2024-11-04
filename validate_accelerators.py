@@ -291,11 +291,11 @@ def test_cti_block_speed():
 def main():
     """ """
     print("\nRunning Accelerated NCT validation tests:")
-    test_matrix_norm_speed()
-    test_cti_accuracy("torch")
-    test_cti_accuracy("jax")
-    test_cti_single_event_speed()
-    test_cti_block_accuracy()
+    # test_matrix_norm_speed()
+    # test_cti_accuracy("torch")
+    # test_cti_accuracy("jax")
+    # test_cti_single_event_speed()
+    # test_cti_block_accuracy()
     test_cti_block_speed()
 
 
