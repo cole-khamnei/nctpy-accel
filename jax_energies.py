@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 
 from tqdm.auto import tqdm
+from . import utils
 
-import utils
 
 # ------------------------------------------------------------------- #
 # --------------------    JAX Precompile LUT     -------------------- #
@@ -50,7 +50,7 @@ def eigh_norm(A, c):
 def eig_norm(A, c):
     """ """
     w, _ = numpy.linalg.eig(A)
-    return A / (c + jnp.abs(w).max())
+    return A / (c + numpy.abs(w).max())
 
 
 def matrix_norm(A, c=1, system="continuous", symmetric=False):
