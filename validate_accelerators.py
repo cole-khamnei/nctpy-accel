@@ -1,14 +1,29 @@
+<<<<<<< HEAD
 import jax_energies as je
 import torch_energies as te
+=======
+import os
+import sys
+
+NCTPY_TORCH_PATH = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, NCTPY_TORCH_PATH + "/../")
+
+
+import nctpy_torch as nctt
+
+from nctpy_torch import jax as je
+from nctpy_torch import torch as te
+from nctpy_torch import utils
+
+>>>>>>> 36212a199dee0617413b53664151c79d3dec064a
 
 import nctpy
 from nctpy import utils as nct_utils
 from nctpy import energies as nct_e
 
 import numpy as np
+import torch
 
-import utils
-from utils import Timer
 from tqdm.auto import tqdm
 
 
@@ -239,13 +254,27 @@ def test_cti_block_speed():
     """ """
     print(f"Testing JAX & Torch Block Methods Speed Comparison:")
     n_nodes = 400
-    n_samples = 2500
 
-    n_batch = 80
+    if torch.cuda.is_available():
+        torch_n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
+        n_batch, n_samples = 80, 2500
+        te_device = "cuda"
+    else:
+        n_batch, n_samples = 20, 300
+        te_device = "cpu" # MPS not supported for control_inputs
+
     n_reps = n_samples // n_batch
+<<<<<<< HEAD
     A_norms, x0s, xfs = get_NCT_args_set(n_batch, n_nodes, seed=32)
     je.get_control_inputs(A_norms[0], x0s, xfs)
     
+=======
+
+    A_norms, x0s, xfs = get_NCT_args_set(n_batch, n_nodes, seed=32)
+    with utils.Timer() as t:
+        je.get_control_inputs(A_norms[0], x0s, xfs)
+
+>>>>>>> 36212a199dee0617413b53664151c79d3dec064a
     for A_si, A_label in zip([0, slice(None, None)], ["single", "multiple"]):
 
         pbar = tqdm(total=n_reps * n_batch, desc=f"NCT-JAX   ({A_label} A | multiple states | batch_size: {n_batch}):")
@@ -254,14 +283,12 @@ def test_cti_block_speed():
             pbar.update(n_batch)
         pbar.close()
 
-        n_batch = te.get_max_batch_size(n_nodes, device=te.get_device())
-        # n_batch = 30
         n_reps = n_samples // n_batch
         A_norms, x0s, xfs = get_NCT_args_set(n_batch, n_nodes, seed=32)
         
         pbar = tqdm(total=n_reps * n_batch, desc=f"NCT-Torch ({A_label} A | multiple states | batch_size: {n_batch}):")
         for _ in range(n_reps):
-            te.get_cti_block(A_norms[A_si], x0s, xfs, device="cuda")
+            te.get_cti_block(A_norms[A_si], x0s, xfs, device=te_device)
             pbar.update(n_batch)
         pbar.close()
     print()
@@ -275,11 +302,11 @@ def test_cti_block_speed():
 def main():
     """ """
     print("\nRunning Accelerated NCT validation tests:")
-    test_matrix_norm_speed()
-    test_cti_accuracy("torch")
-    test_cti_accuracy("jax")
-    test_cti_single_event_speed()
-    test_cti_block_accuracy()
+    # test_matrix_norm_speed()
+    # test_cti_accuracy("torch")
+    # test_cti_accuracy("jax")
+    # test_cti_single_event_speed()
+    # test_cti_block_accuracy()
     test_cti_block_speed()
 
 

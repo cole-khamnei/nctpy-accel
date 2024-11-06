@@ -12,7 +12,7 @@ import h5py
 from time import time
 from tqdm.auto import tqdm
 
-import utils
+from . import utils
 
 # ------------------------------------------------------------------- #
 # --------------------       Torch Utils.        -------------------- #

@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 
 from tqdm.auto import tqdm
+from . import utils
 
-import utils
 
 # ------------------------------------------------------------------- #
 # --------------------    JAX Precompile LUT     -------------------- #
@@ -50,13 +50,16 @@ def eigh_norm(A, c):
 def eig_norm(A, c):
     """ """
     w, _ = numpy.linalg.eig(A)
-    return A / (c + jnp.abs(w).max())
+    return A / (c + numpy.abs(w).max())
 
 
 def matrix_norm(A, c=1, system="continuous", symmetric=False):
     """ """
+    if A.ndim > 2:
+        return numpy.array([matrix_norm(A_i, c=1, system=system, symmetric=symmetric) for A_i in A])
+
     utils.check_system(system)
-    
+
     # eig_normed_A = eig_norm(A, c)
     eig_normed_A = eigh_norm(A, c) if check_symmetric(A) or symmetric else eig_norm(A, c)
     return eig_normed_A - jnp.eye(A.shape[0]) if system == 'continuous' else eig_normed_A
@@ -92,7 +95,7 @@ def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
         c = jnp.concatenate([zero_array, 2 * S_xr], axis=concat_dim - 1)
         c = jnp.linalg.solve(M, c)
 
-        Ad = jax.scipy.linalg.expm(M * dt) 
+        Ad = jax.scipy.linalg.expm(M * dt)
         Bd = ((Ad - big_I) @ c).squeeze()
         if n_batch > 0 and n_A == 0:
             Ad = jnp.tile(Ad, (n_batch, 1, 1))
@@ -154,7 +157,6 @@ _compute_single_trajectory_funcs = CompiledFunctionSet(build_compute_single_traj
 def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
     """ """
     state_tensor_shape = (n_batch, n_nodes, 1)
-
     big_I = jnp.eye(2 * n_nodes)
 
     def compute_block_trajectory(A_norms, dynamics_matrices, x0s, xfs, rho):
@@ -201,16 +203,35 @@ _compute_block_trajectory_funcs = CompiledFunctionSet(build_compute_block_trajec
 # ------------------------------------------------------------------- #
 
 
-def get_control_inputs(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1):
+def get_CTI_dimensions(A_norm, x0s, xfs, T, dt):
     """ """
-    n_nodes = A_norm.shape[-1]
+    assert x0s.shape == xfs.shape
+    assert x0s.shape[-1] == A_norm.shape[-1]
+
+    n_nodes = x0s.shape[-1]
     n_integrate = int(numpy.round(T / dt) + 1)
-    n_batch = len(x0s) if x0s.ndim == 2 else 0
+    n_states = len(x0s) if x0s.ndim == 2 else 0
     n_A = A_norm.shape[0] if A_norm.ndim == 3 else 0
 
+
+    return n_nodes, n_integrate, n_states, n_A
+
+
+def get_S_and_B_matrices(S, B, n_nodes):
+    """ """
     I = jnp.eye(n_nodes)
     B = I if B is None else jnp.array(B)
     S = I if S is None else jnp.array(S)
+    assert S.shape == B.shape
+
+    return S, B
+
+
+def get_control_inputs(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1, dynamics_matrices=None):
+    """ """
+
+    n_nodes, n_integrate, n_batch, n_A  = get_CTI_dimensions(A_norm, x0s, xfs, T, dt)
+    S, B = get_S_and_B_matrices(S, B, n_nodes)
 
     compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, n_batch, n_A)
     dynamics_matrices = compute_dynamics_matrices(A_norm, S, B, T, dt, rho)
@@ -221,6 +242,48 @@ def get_control_inputs(A_norm, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1):
         compute_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch, n_integrate)
 
     return compute_trajectory(A_norm, dynamics_matrices, x0s, xfs, rho)
+
+
+def get_cti_batch(A_norms, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1, n_batch=20, pbar_kws=dict(leave=False)):
+    """ """
+    #TODO: get from function for system specifics for batch size
+
+    multiple_A = A_norms.ndim == 3
+    assert len(A_norms) == len(x0s) or not multiple_A
+
+    n_nodes, n_integrate, n_states, n_A  = get_CTI_dimensions(A_norms, x0s, xfs, T, dt)
+    n_blocks = int(numpy.ceil(n_states / n_batch))
+    S, B = get_S_and_B_matrices(S, B, n_nodes)
+
+    E_s = numpy.empty(n_states)
+    x_s = numpy.empty((n_states, n_integrate, n_nodes))
+    u_s = numpy.empty((n_states, n_integrate, n_nodes))
+    err_s = numpy.empty((n_states, 2))
+
+
+    compute_dynamics_matrices = _compute_dynamics_matrices_funcs(n_nodes, n_integrate, n_batch, n_A)
+    if not multiple_A:
+        single_A_dynamics_matrices = compute_dynamics_matrices(A_norms, S, B, T, dt, rho)
+
+    pbar = tqdm(total=n_states, desc="JAX CTI trajectory set", **pbar_kws)
+    for i in range(n_blocks):
+        sl = slice(n_batch * i, min(n_batch * (i + 1), n_states))
+
+        n_batch_i = n_states % n_batch if i == (n_blocks - 1) else n_batch
+        if multiple_A:
+            dynamics_matrices = compute_dynamics_matrices(A_norms[sl], S, B, T, dt, rho)
+        else:
+            Ad, Bd, E11, E12, dd_bias, B_T = single_A_dynamics_matrices
+            dynamics_matrices = (Ad[:n_batch_i], Bd, E11, E12, dd_bias, B_T) # batch size effects of Ad
+
+        compute_trajectory = _compute_block_trajectory_funcs(n_nodes, n_batch_i, n_integrate)
+        trajectory_results = compute_trajectory(A_norms[sl], dynamics_matrices, x0s[sl], xfs[sl], rho)
+        E_s[sl], x_s[sl], u_s[sl], err_s[sl] = trajectory_results
+
+        pbar.update(sl.stop - sl.start)
+    pbar.close()
+
+    return E_s, x_s, u_s, err_s
 
 
 # ------------------------------------------------------------------- #
