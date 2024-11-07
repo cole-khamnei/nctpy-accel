@@ -7,9 +7,9 @@ from tqdm.auto import tqdm
 from . import utils
 
 
-# ------------------------------------------------------------------- #
-# --------------------    JAX Precompile LUT     -------------------- #
-# ------------------------------------------------------------------- #
+# ----------------------------------------------------------------------------# 
+# -------------------          JAX Precompile LUT          -------------------# 
+# ----------------------------------------------------------------------------# 
 """
 Fairly certain there is a better way to do this with JAX, as it auto-registers functions
 with hash, tried @partial with staticargs which worked, but this was quicker to implement.
@@ -17,6 +17,7 @@ with hash, tried @partial with staticargs which worked, but this was quicker to 
 May change in future.
 
 """
+
 
 class CompiledFunctionSet():
     def __init__(self, make_function, initial_args=[], make_key=None):
@@ -31,16 +32,21 @@ class CompiledFunctionSet():
         return self.compiled_versions[key]
 
 
-# ------------------------------------------------------------------- #
-# --------------------     JAX NCTPY Utils      -------------------- #
-# ------------------------------------------------------------------- #
+# ----------------------------------------------------------------------------# 
+# --------------------          JAX NCTPY Utils           --------------------# 
+# ----------------------------------------------------------------------------# 
 
 @jax.jit
+
+
 def check_symmetric(a, rtol=1e-05, atol=1e-08):
+    """ """
     return jnp.allclose(a, a.T, rtol=rtol, atol=atol)
 
 
 @jax.jit
+
+
 def eigh_norm(A, c):
     """ """
     w, _ = jnp.linalg.eigh(A)
@@ -65,9 +71,9 @@ def matrix_norm(A, c=1, system="continuous", symmetric=False):
     return eig_normed_A - jnp.eye(A.shape[0]) if system == 'continuous' else eig_normed_A
 
 
-# ------------------------------------------------------------------- #
-# ----------------   Control Input Build Functions    --------------- #
-# ------------------------------------------------------------------- #
+# ----------------------------------------------------------------------------# 
+# --------               Control Input Build Functions                --------# 
+# ----------------------------------------------------------------------------# 
 
 
 def build_compute_dynamics_matrices(n_nodes, n_integrate, n_batch, n_A):
@@ -149,9 +155,9 @@ def build_compute_single_trajectory(n_nodes, n_integrate):
 _compute_single_trajectory_funcs = CompiledFunctionSet(build_compute_single_trajectory)
 
 
-# ------------------------------------------------------------------- #
-# --------------------    Block Trajectory       -------------------- #
-# ------------------------------------------------------------------- #
+# ----------------------------------------------------------------------------# 
+# --------------------          Block Trajectory          --------------------# 
+# ----------------------------------------------------------------------------# 
 
 
 def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
@@ -198,9 +204,9 @@ def build_compute_block_trajectory(n_nodes, n_batch, n_integrate):
 _compute_block_trajectory_funcs = CompiledFunctionSet(build_compute_block_trajectory)
 
 
-# ------------------------------------------------------------------- #
-# --------------------    Control Input Func     -------------------- #
-# ------------------------------------------------------------------- #
+# ----------------------------------------------------------------------------# 
+# -------------------          Control Input Func          -------------------# 
+# ----------------------------------------------------------------------------# 
 
 
 def get_CTI_dimensions(A_norm, x0s, xfs, T, dt):
@@ -286,6 +292,6 @@ def get_cti_batch(A_norms, x0s, xfs, B=None, S=None, T=1, dt=0.001, rho=1, n_bat
     return E_s, x_s, u_s, err_s
 
 
-# ------------------------------------------------------------------- #
-# --------------------            End            -------------------- #
-# ------------------------------------------------------------------- #
+# ----------------------------------------------------------------------------# 
+# --------------------                End                 --------------------# 
+# ----------------------------------------------------------------------------#
