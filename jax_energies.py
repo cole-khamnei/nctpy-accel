@@ -68,7 +68,7 @@ def matrix_norm(A, c=1, system="continuous", symmetric=False):
 
     # eig_normed_A = eig_norm(A, c)
     eig_normed_A = eigh_norm(A, c) if check_symmetric(A) or symmetric else eig_norm(A, c)
-    return eig_normed_A - jnp.eye(A.shape[0]) if system == 'continuous' else eig_normed_A
+    return numpy.array(eig_normed_A - jnp.eye(A.shape[0])) if system == 'continuous' else eig_normed_A
 
 
 # ----------------------------------------------------------------------------# 
